@@ -123,29 +123,37 @@ export class BrowserSession {
       return await this.withFile(file, async name => {
         const result = await this.media.exec([
           '-v', 'error', '-threads', '1', '-i', name, '-an', '-map', '0:V:0',
-          '-t', String(duration), '-vf', 'fps=3,scale=32:24:flags=area,format=gray',
-          '-threads', '1', '-c:v', 'rawvideo', '-f', 'rawvideo', '/scenes.gray',
+          '-t', String(duration), '-vf', 'fps=3,scale=32:24:flags=area,format=rgb24',
+          '-threads', '1', '-c:v', 'rawvideo', '-f', 'rawvideo', '/scenes.rgb',
         ])
         if (result !== 0) return []
-        const bytes = await this.media.readFile('/scenes.gray')
+        const bytes = await this.media.readFile('/scenes.rgb')
         if (typeof bytes === 'string') return []
         const beats: VisualBeat[] = []
-        for (let at = 0; at + pixels <= bytes.length; at += pixels) {
+        const stride = pixels * 3
+        for (let at = 0; at + stride <= bytes.length; at += stride) {
+          const view = Array<number>(36).fill(0)
           let light = 0
           let edge = 0
           let delta = 0
+          let previous = 0
           for (let j = 0; j < pixels; j++) {
-            const value = bytes[at + j]
+            const p = at + j * 3
+            const value = (bytes[p] + 2 * bytes[p + 1] + bytes[p + 2]) / 4
+            const tile = (Math.floor(j / 256) * 4 + Math.floor((j % 32) / 8)) * 3
+            for (let channel = 0; channel < 3; channel++) view[tile + channel] += bytes[p + channel] / 64
             light += value
-            if (j % 32) edge += Math.abs(value - bytes[at + j - 1])
-            if (at) delta += Math.abs(value - bytes[at + j - pixels])
+            if (j % 32) edge += Math.abs(value - previous)
+            if (at) delta += Math.abs(value - (bytes[p - stride] + 2 * bytes[p - stride + 1] + bytes[p - stride + 2]) / 4)
+            previous = value
           }
           const brightness = light / pixels
           const motion = delta / pixels
           const exposure = Math.min(1, brightness / 40, (255 - brightness) / 35)
           const detail = Math.min(1, edge / pixels / 18)
           beats.push({
-            time: (at / pixels + .5) / 3,
+            time: (at / stride + .5) / 3,
+            view,
             change: Math.min(1, motion / 36),
             quality: .72 * exposure + .35 * detail + Math.min(.3, motion / 40) - Math.max(0, motion - 38) / 70,
           })
@@ -153,7 +161,7 @@ export class BrowserSession {
         return beats
       })
     } finally {
-      await this.media.deleteFile('/scenes.gray').catch(() => {})
+      await this.media.deleteFile('/scenes.rgb').catch(() => {})
     }
   }
 
@@ -232,14 +240,15 @@ export class BrowserSession {
   }
 
   async export(sequence: Sequence, options: {
-    start: number; end: number; shape: Shape; captions: boolean; preview?: boolean; ranges?: Range[]
+    start: number; end: number; shape: Shape; captions: boolean; preview?: boolean; ranges?: Range[]; audioRanges?: Range[]
   }, stage: Work) {
     const { start, end, shape, captions, preview } = options
-    const ranges = (options.ranges ?? [{ start, end }]).map(range => ({
+    const toFrames = (range: Range) => ({
       start: Math.round(range.start * FPS),
       zoom: range.zoom ?? 1,
       end: Math.min(Math.round(sequence.duration * FPS), Math.round(range.end * FPS)),
-    }))
+    })
+    const ranges = (options.ranges ?? [{ start, end }]).map(toFrames)
     const totalFrames = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
     if (ranges.some(range => !Number.isFinite(range.start) || !(range.end > range.start) || range.start < 0)
         || totalFrames < FPS || totalFrames > 60 * FPS) {
@@ -251,7 +260,7 @@ export class BrowserSession {
     const [long, short] = preview ? [640, 360] : [1280, 720]
     const [width, height] = shape === 'vertical' ? [short, long] : [long, short]
     const continuousVoice = Boolean(sequence.voice && options.ranges)
-    const audioRanges = continuousVoice ? [{ start: 0, end: totalFrames }] : ranges
+    const audioRanges = continuousVoice ? [{ start: 0, end: totalFrames }] : options.audioRanges?.map(toFrames) ?? ranges
     let cueOffset = 0
     const outputCues = audioRanges.flatMap(range => {
       const cues = cutCues(sequence.cues, range.start / FPS, range.end / FPS)

@@ -162,7 +162,7 @@ export default function WebEditor() {
     if (!analysis) return
     void work(previewOnly ? 'Preparing preview' : 'Preparing export', async (session, update, current) => {
       const result = await session.export(analysis, {
-        start, end, shape, captions: burn, preview: previewOnly, ranges: cuts[selected]?.ranges,
+        start, end, shape, captions: burn, preview: previewOnly, ranges: cuts[selected]?.ranges, audioRanges: cuts[selected]?.audioRanges,
       }, update)
       if (!current()) return
       if (previewOnly) {
@@ -192,7 +192,7 @@ export default function WebEditor() {
   const reviewing = analysis !== null
   const editRanges = cuts[selected]?.ranges
   const currentCaptions = analysis ? (editRanges && !voice
-    ? analysis.cues.filter(cue => editRanges.some(range => visibleCues([cue], range.start, range.end).length))
+    ? analysis.cues.filter(cue => (cuts[selected]?.audioRanges ?? editRanges).some(range => visibleCues([cue], range.start, range.end).length))
     : visibleCues(analysis.cues, start, end)) : []
   const caption = burn && currentCaptions.find(cue => cue.start <= time && cue.end > time)?.text
   const activeDuration = end - start

@@ -1,8 +1,8 @@
 export type Cue = { id: number; start: number; end: number; text: string }
 export type Range = { start: number; end: number; zoom?: number }
-export type Cut = Range & { opening: string; ranges?: Range[] }
+export type Cut = Range & { opening: string; ranges?: Range[]; audioRanges?: Range[] }
 
-export type VisualBeat = { time: number; quality: number; change: number }
+export type VisualBeat = { time: number; quality: number; change: number; view: number[] }
 type Footage = { duration: number; visuals: VisualBeat[] }
 
 export function montage(clips: Footage[], cues: Cue[], target: number, brief: string, voice: boolean): Cut {
@@ -64,9 +64,76 @@ export function montage(clips: Footage[], cues: Cue[], target: number, brief: st
     }
     sourceOffset += duration
   }
-  return output >= 1 - 1e-6 && ranges.length > 1
-    ? { start: 0, end: output, ranges, opening: 'Quick-cut edit' }
-    : { start: 0, end: Math.min(total, target), opening: 'Start of recording' }
+  if (output < 1 - 1e-6 || ranges.length < 2) {
+    return { start: 0, end: Math.min(total, target), opening: 'Start of recording' }
+  }
+  return switchViews(clips, ranges, cues, voice, output)
+}
+
+function switchViews(clips: Footage[], ordered: Range[], cues: Cue[], voice: boolean, duration: number): Cut {
+  let offset = 0
+  const views = clips.map(clip => {
+    const start = offset
+    offset += clip.duration
+    return { start, end: offset, visuals: clip.visuals }
+  })
+  const shotView = (range: Range) => views.findIndex(view => range.start < view.end - 1e-6)
+  const still = (range: Range) => {
+    const clip = views[shotView(range)]
+    const middle = (range.start + range.end) / 2 - clip.start
+    return clip.visuals[Math.floor(middle * 3)]?.view
+  }
+  const difference = (from: Range, to: Range) => {
+    const left = still(from)
+    const right = still(to)
+    return left && right ? left.reduce((sum, value, i) => sum + Math.abs(value - right[i]), 0) / (255 * left.length) : 0
+  }
+  const independentAudio = voice || !cues.length
+  const pools = views.map((_, i) => ordered.filter(range => shotView(range) === i))
+  const picture: Range[] = []
+  if (independentAudio) {
+    // Keep the opener and use each excerpt once, favoring a different source and composition.
+    while (pools.some(pool => pool.length)) {
+      const last = picture.at(-1)
+      let best = -1
+      let score = -Infinity
+      for (const [i, pool] of pools.entries()) {
+        const next = pool[0]
+        if (!next) continue
+        const value = last
+          ? Number(shotView(last) !== i) + difference(last, next) + .14 * pool.length
+          : -next.start
+        if (value > score) { best = i; score = value }
+      }
+      const next = pools[best].shift()!
+      picture.push({ ...next, zoom: last && shotView(last) !== best ? undefined : next.zoom })
+    }
+  } else {
+    // Replace picture only over original speech. Use cutaways from ranges with no detected speech.
+    const cutaways = ordered.filter(range => !cues.some(cue => cue.end > range.start && cue.start < range.end)
+      && !cues.some(cue => {
+        const view = views[shotView(range)]
+        return cue.end > view.start && cue.start < view.end
+      }))
+    for (const [i, range] of ordered.entries()) {
+      const last = picture.at(-1)
+      const length = Math.round((range.end - range.start) * 30) / 30
+      const alternate = last && i % 3 !== 0 && shotView(last) === shotView(range)
+        ? cutaways.filter(candidate => shotView(candidate) !== shotView(range) && candidate.end - candidate.start >= length - 1e-6)
+          .sort((a, b) => difference(last, b) - difference(last, a))[0]
+        : undefined
+      if (alternate) {
+        const index = cutaways.indexOf(alternate)
+        cutaways.splice(index, 1)
+        picture.push({ start: alternate.start, end: alternate.start + length })
+      } else picture.push(range)
+    }
+  }
+  return {
+    start: 0, end: duration, ranges: picture,
+    audioRanges: independentAudio ? undefined : ordered,
+    opening: 'Quick-cut edit',
+  }
 }
 export type SpeechItem = { text: string; timestamp: [number, number | null] }
 
