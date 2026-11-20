@@ -1,49 +1,71 @@
 export type Cue = { id: number; start: number; end: number; text: string }
-export type Range = { start: number; end: number }
+export type Range = { start: number; end: number; zoom?: number }
 export type Cut = Range & { opening: string; ranges?: Range[] }
 
-export function montage(durations: number[], cues: Cue[], target: number, brief: string, voice: boolean): Cut {
-  const frame = (seconds: number) => Math.round(seconds * 30) / 30
-  const total = durations.reduce((sum, duration) => sum + duration, 0)
-  // Leave room to cut within the footage, even when the source is shorter than the target.
-  const budget = Math.min(target, Math.max(1, total * .78))
-  const relevance = terms(brief)
-  let offset = 0
-  let remaining = Math.round(budget * 30)
+export type VisualBeat = { time: number; quality: number; change: number }
+type Footage = { duration: number; visuals: VisualBeat[] }
+
+export function montage(clips: Footage[], cues: Cue[], target: number, brief: string, voice: boolean): Cut {
+  const fps = 30
+  const total = clips.reduce((sum, clip) => sum + clip.duration, 0)
+  const budget = Math.min(target, Math.max(1, total * .81))
+  const rhythm = [1.05, 1.65, 2.2, 1.35, 2.6, 1.75, 2.0]
+  const relevant = terms(brief)
   const ranges: Range[] = []
-  for (const duration of durations) {
+  let remaining = Math.round(budget * fps)
+  let sourceOffset = 0
+  let output = 0
+  const insideSpeech = (at: number) => cues.some(cue => cue.start + .07 < at && cue.end - .07 > at)
+
+  for (const { duration, visuals } of clips) {
     const keep = Math.min(duration, budget * duration / total)
-    const count = Math.max(1, Math.round(keep / 3.8))
-    const window = duration / count
-    for (let i = 0; i < count; i++) {
-      const left = offset + i * window
-      const right = left + window
-      const span = keep / count
-      let best = left + (window - span) / 2
-      if (!voice) {
-        let bestScore = 0
-        for (const cue of cues) {
-          if (cue.start < left || cue.end > right) continue
-          const start = Math.max(left, Math.min(cue.start - .10, right - span))
-          if (cue.end > start + span) continue
-          const words = terms(cue.text)
-          const complete = /[.!?。！？]$/.test(cue.text)
-          const score = cue.end - cue.start + Number(complete) + 3 * [...relevance].filter(word => words.has(word)).length
-          if (score > bestScore) { best = start; bestScore = score }
-        }
+    const count = Math.max(1, Math.round(keep / 1.8))
+    const beats = Array.from({ length: count }, (_, i) => rhythm[(ranges.length + i) % rhythm.length])
+    const weight = beats.reduce((sum, beat) => sum + beat, 0)
+    let position = 0
+    for (const [i, beat] of beats.entries()) {
+      const share = beat / weight
+      const left = position
+      const right = Math.min(duration, left + duration * share)
+      position = right
+      let span = Math.min(right - left, keep * share)
+      if (voice && i < beats.length - 1) {
+        const nearby = cues.map(cue => cue.end - output)
+          .filter(gap => gap >= Math.max(.8, span - .24) && gap <= Math.min(right - left, span + .18))
+          .sort((a, b) => Math.abs(a - span) - Math.abs(b - span))[0]
+        if (nearby !== undefined) span = nearby
       }
-      const start = frame(best)
-      const frames = Math.min(remaining, Math.round((frame(best + span) - start) * 30))
-      if (frames > 0) {
-        ranges.push({ start, end: start + frames / 30 })
-        remaining -= frames
+      const center = left + (right - left - span) / 2
+      const nearbyCues = !voice ? cues.filter(cue => cue.end > sourceOffset + left && cue.start < sourceOffset + right) : []
+      const candidates = [center, left, ...visuals.filter(visual => visual.time >= left && visual.time <= right - span)
+        .map(visual => visual.time), ...nearbyCues.map(cue => cue.start - sourceOffset - .08)]
+      const score = (start: number) => {
+        const begin = sourceOffset + start
+        const end = begin + span
+        const sampled = visuals.filter(visual => visual.time >= start && visual.time < start + span)
+        const quality = sampled.reduce((sum, visual) => sum + visual.quality, 0) / Math.max(1, sampled.length)
+        const opening = sampled[0]?.change ?? 0
+        const speech = nearbyCues.filter(cue => cue.start >= begin && cue.end <= end)
+        const words = terms(speech.map(cue => cue.text).join(' '))
+        const matches = [...relevant].filter(word => words.has(word)).length
+        return quality + .35 * opening - .13 * Math.abs(start - center)
+          + .65 * speech.length + 1.5 * matches
+          - (!voice ? 1.4 * (Number(insideSpeech(begin)) + Number(insideSpeech(end))) : 0)
       }
+      const bounded = candidates.filter(start => start >= left && start <= right - span + 1e-6)
+      const best = bounded.map(start => ({ start, score: score(start) })).sort((a, b) => b.score - a.score)[0]?.start ?? center
+      const start = Math.max(Math.ceil((sourceOffset + left) * fps - 1e-6), Math.round((sourceOffset + best) * fps))
+      const end = Math.min(Math.floor((sourceOffset + right) * fps + 1e-6), start + Math.round(span * fps), start + remaining)
+      if (end <= start) continue
+      const similar = visuals.filter(visual => visual.time >= left && visual.time < right).every(visual => visual.change < .22)
+      ranges.push({ start: start / fps, end: end / fps, zoom: i % 2 && similar ? 1.12 : undefined })
+      remaining -= end - start
+      output += (end - start) / fps
     }
-    offset += duration
+    sourceOffset += duration
   }
-  const length = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
-  return length >= 1 - 1e-6 && ranges.length > 1
-    ? { start: 0, end: length, ranges, opening: 'Quick-cut edit' }
+  return output >= 1 - 1e-6 && ranges.length > 1
+    ? { start: 0, end: output, ranges, opening: 'Quick-cut edit' }
     : { start: 0, end: Math.min(total, target), opening: 'Start of recording' }
 }
 export type SpeechItem = { text: string; timestamp: [number, number | null] }

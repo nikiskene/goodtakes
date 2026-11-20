@@ -2,14 +2,14 @@ import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg'
 import coreUrl from '@ffmpeg/core?url'
 import wasmUrl from '@ffmpeg/core/wasm?url'
 import fontUrl from '../../assets/DejaVuSans-Bold.ttf?url'
-import { ass, cutCues, groupCaptions, type Cue, type Range, type SpeechItem } from './editorial'
+import { ass, cutCues, groupCaptions, type Cue, type Range, type VisualBeat, type SpeechItem } from './editorial'
 
 export const MAX_FILE = 220 * 1024 ** 2
 export const MAX_DURATION = 180
 const eastAsianFont = 'https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf'
 
 const FPS = 30
-type Clip = { file: File; frames: number; audio: boolean; hdr: boolean }
+type Clip = { file: File; frames: number; audio: boolean; hdr: boolean; visuals: VisualBeat[] }
 export type Sequence = { clips: Clip[]; voice: File | null; duration: number; cues: Cue[] }
 type Work = (stage: string) => void
 type Shape = 'vertical' | 'landscape'
@@ -117,6 +117,46 @@ export class BrowserSession {
     return result
   }
 
+  private async visualBeats(file: File, duration: number): Promise<VisualBeat[]> {
+    const pixels = 32 * 24
+    try {
+      return await this.withFile(file, async name => {
+        const result = await this.media.exec([
+          '-v', 'error', '-threads', '1', '-i', name, '-an', '-map', '0:V:0',
+          '-t', String(duration), '-vf', 'fps=3,scale=32:24:flags=area,format=gray',
+          '-threads', '1', '-c:v', 'rawvideo', '-f', 'rawvideo', '/scenes.gray',
+        ])
+        if (result !== 0) return []
+        const bytes = await this.media.readFile('/scenes.gray')
+        if (typeof bytes === 'string') return []
+        const beats: VisualBeat[] = []
+        for (let at = 0; at + pixels <= bytes.length; at += pixels) {
+          let light = 0
+          let edge = 0
+          let delta = 0
+          for (let j = 0; j < pixels; j++) {
+            const value = bytes[at + j]
+            light += value
+            if (j % 32) edge += Math.abs(value - bytes[at + j - 1])
+            if (at) delta += Math.abs(value - bytes[at + j - pixels])
+          }
+          const brightness = light / pixels
+          const motion = delta / pixels
+          const exposure = Math.min(1, brightness / 40, (255 - brightness) / 35)
+          const detail = Math.min(1, edge / pixels / 18)
+          beats.push({
+            time: (at / pixels + .5) / 3,
+            change: Math.min(1, motion / 36),
+            quality: .72 * exposure + .35 * detail + Math.min(.3, motion / 40) - Math.max(0, motion - 38) / 70,
+          })
+        }
+        return beats
+      })
+    } finally {
+      await this.media.deleteFile('/scenes.gray').catch(() => {})
+    }
+  }
+
   async analyze(files: File[], voice: File | null, language: string, stage: Work): Promise<Sequence> {
     if (!files.length) throw new Error('Add at least one video clip.')
     if (files.reduce((size, file) => size + file.size, voice?.size ?? 0) > MAX_FILE) {
@@ -137,7 +177,7 @@ export class BrowserSession {
       frames += clipFrames
       if (frames > MAX_DURATION * FPS) throw new Error('Use up to three minutes of video in total.')
       clips.push({
-        file, frames: clipFrames, audio: metadata.streams?.some(stream => stream.codec_type === 'audio') ?? false,
+        file, frames: clipFrames, visuals: [], audio: metadata.streams?.some(stream => stream.codec_type === 'audio') ?? false,
         hdr: ['arib-std-b67', 'smpte2084'].includes(video.color_transfer ?? ''),
       })
     }
@@ -148,6 +188,10 @@ export class BrowserSession {
       if (!metadata.streams?.some(stream => stream.codec_type === 'audio')) {
         throw new Error('Choose a voice recording with an audio track.')
       }
+    }
+    for (const [index, clip] of clips.entries()) {
+      stage(`Looking for visual changes · clip ${index + 1} of ${clips.length}`)
+      clip.visuals = await this.visualBeats(clip.file, clip.frames / FPS)
     }
     const duration = frames / FPS
     if (!voice && !clips.some(clip => clip.audio)) return { clips, voice, duration, cues: [] }
@@ -193,6 +237,7 @@ export class BrowserSession {
     const { start, end, shape, captions, preview } = options
     const ranges = (options.ranges ?? [{ start, end }]).map(range => ({
       start: Math.round(range.start * FPS),
+      zoom: range.zoom ?? 1,
       end: Math.min(Math.round(sequence.duration * FPS), Math.round(range.end * FPS)),
     }))
     const totalFrames = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
@@ -232,7 +277,7 @@ export class BrowserSession {
         await this.media.writeFile(tempFont, new Uint8Array(await font.arrayBuffer()))
       }
 
-      for (const { start: startFrame, end: endFrame } of ranges) {
+      for (const { start: startFrame, end: endFrame, zoom } of ranges) {
         let sourceOffset = 0
         for (const clip of sequence.clips) {
           const clipStart = sourceOffset
@@ -256,7 +301,7 @@ export class BrowserSession {
           })
           if (burn) await this.media.writeFile('/captions.ass', ass(clipCues, width, height, fontFamily))
           const filters = [
-            `scale=${width}:${height}:force_original_aspect_ratio=increase:force_divisible_by=2${clip.hdr ? '' : ':out_color_matrix=bt709'}`,
+            `scale=${Math.ceil(width * zoom / 2) * 2}:${Math.ceil(height * zoom / 2) * 2}:force_original_aspect_ratio=increase:force_divisible_by=2${clip.hdr ? '' : ':out_color_matrix=bt709'}`,
             `crop=${width}:${height}`, 'setsar=1', 'fps=30', 'tpad=stop_mode=clone:stop_duration=0.1',
             ...(clip.hdr ? ['zscale=t=linear:npl=100', 'format=gbrpf32le', 'zscale=p=bt709', 'tonemap=mobius:desat=1.5',
               'zscale=t=bt709:m=bt709:r=limited'] : []),

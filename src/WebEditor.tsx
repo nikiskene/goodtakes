@@ -150,7 +150,7 @@ export default function WebEditor() {
       const result = await session.analyze(sources, voice, language, update)
       if (!current()) return
       const options = suggest(result.cues, length, result.duration, brief)
-      const edited = montage(result.clips.map(clip => clip.frames / 30), result.cues, length, brief, Boolean(voice))
+      const edited = montage(result.clips.map(clip => ({ duration: clip.frames / 30, visuals: clip.visuals })), result.cues, length, brief, Boolean(voice))
       if (edited.ranges) options.unshift(edited)
       setAnalysis(result)
       setCuts(options)
