@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Brand } from './Brand'
+import { Profile } from './Profile'
 import { BrowserSession, MAX_FILE, type Sequence } from './web/session'
 import { montage, suggest, srt, visibleCues, type Cut } from './web/editorial'
 
@@ -38,6 +39,7 @@ export default function WebEditor() {
   const [stage, setStage] = useState('')
   const [error, setError] = useState('')
   const [previewUnavailable, setPreviewUnavailable] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
   const [saved, setSaved] = useState<Export | null>(null)
 
   useEffect(() => () => engine.current?.stop(), [])
@@ -238,8 +240,13 @@ export default function WebEditor() {
 
   return <div className="desktop-app web-editor">
     <header className="app-bar"><a href="/" aria-label="GoodTake home"><Brand /></a>
-      {reviewing && <button type="button" disabled={!!stage} onClick={clearReview}>Edit sources</button>}</header>
+      <div className="actions">
+        {reviewing && <button type="button" disabled={!!stage} onClick={clearReview}>Edit sources</button>}
+        <button type="button" aria-expanded={profileOpen} onClick={() => setProfileOpen(!profileOpen)}>Profile</button>
+      </div>
+    </header>
     <main className="app-shell">
+      {profileOpen && <Profile onClose={() => setProfileOpen(false)} />}
       <input ref={picker} aria-label="Video clips" type="file" accept="video/*,.mov,.mp4,.m4v" multiple hidden
         onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} />
       <input ref={voicePicker} aria-label="Voice recording" type="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf,.aiff" hidden

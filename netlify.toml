@@ -5,6 +5,8 @@
 [build.environment]
   NODE_VERSION = "22"
   ONNXRUNTIME_NODE_INSTALL_CUDA = "skip"
+  VITE_SUPABASE_URL = "https://tsxgcjhcyckgbrkvebfq.supabase.co"
+  VITE_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_BSuasiiVhBSbKNyLFde0Zw_OTPgOx8Z"
 
 [[redirects]]
   from = "/editor"
