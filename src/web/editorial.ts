@@ -1,5 +1,51 @@
 export type Cue = { id: number; start: number; end: number; text: string }
-export type Cut = { start: number; end: number; opening: string }
+export type Range = { start: number; end: number }
+export type Cut = Range & { opening: string; ranges?: Range[] }
+
+export function montage(durations: number[], cues: Cue[], target: number, brief: string, voice: boolean): Cut {
+  const frame = (seconds: number) => Math.round(seconds * 30) / 30
+  const total = durations.reduce((sum, duration) => sum + duration, 0)
+  // Leave room to cut within the footage, even when the source is shorter than the target.
+  const budget = Math.min(target, Math.max(1, total * .78))
+  const relevance = terms(brief)
+  let offset = 0
+  let remaining = Math.round(budget * 30)
+  const ranges: Range[] = []
+  for (const duration of durations) {
+    const keep = Math.min(duration, budget * duration / total)
+    const count = Math.max(1, Math.round(keep / 3.8))
+    const window = duration / count
+    for (let i = 0; i < count; i++) {
+      const left = offset + i * window
+      const right = left + window
+      const span = keep / count
+      let best = left + (window - span) / 2
+      if (!voice) {
+        let bestScore = 0
+        for (const cue of cues) {
+          if (cue.start < left || cue.end > right) continue
+          const start = Math.max(left, Math.min(cue.start - .10, right - span))
+          if (cue.end > start + span) continue
+          const words = terms(cue.text)
+          const complete = /[.!?。！？]$/.test(cue.text)
+          const score = cue.end - cue.start + Number(complete) + 3 * [...relevance].filter(word => words.has(word)).length
+          if (score > bestScore) { best = start; bestScore = score }
+        }
+      }
+      const start = frame(best)
+      const frames = Math.min(remaining, Math.round((frame(best + span) - start) * 30))
+      if (frames > 0) {
+        ranges.push({ start, end: start + frames / 30 })
+        remaining -= frames
+      }
+    }
+    offset += duration
+  }
+  const length = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
+  return length >= 1 - 1e-6 && ranges.length > 1
+    ? { start: 0, end: length, ranges, opening: 'Quick-cut edit' }
+    : { start: 0, end: Math.min(total, target), opening: 'Start of recording' }
+}
 export type SpeechItem = { text: string; timestamp: [number, number | null] }
 
 export function groupCaptions(words: SpeechItem[], sourceLength: number) {
@@ -82,7 +128,7 @@ function stamp(time: number, ass: boolean) {
 }
 
 export function srt(cues: Cue[]) {
-  return cues.map((cue, i) => `${i + 1}\n${stamp(cue.start, false)} --> ${stamp(cue.end, false)}\n${cue.text.replace(/\s+/g, ' ')}\n\n`).join('')
+  return cues.map((cue, i) => `${i + 1}\n${stamp(cue.start, false)} --> ${stamp(cue.end, false)}\n${cue.text.toUpperCase().replace(/\s+/g, ' ')}\n\n`).join('')
 }
 
 export function ass(cues: Cue[], width: number, height: number, fontFamily: string) {
@@ -100,7 +146,7 @@ Style: GoodTake,${fontFamily},${vertical ? 37 : 33},&H00FFFFFF,&H00FFFFFF,&H0013
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 `
   return header + cues.map(cue => {
-    const text = cue.text.replace(/\s+/g, ' ').replaceAll('\\', '＼').replaceAll('{', '｛').replaceAll('}', '｝')
+    const text = cue.text.toUpperCase().replace(/\s+/g, ' ').replaceAll('\\', '＼').replaceAll('{', '｛').replaceAll('}', '｝')
     return `Dialogue: 0,${stamp(cue.start, true)},${stamp(cue.end, true)},GoodTake,,0,0,0,,${text}\n`
   }).join('')
 }

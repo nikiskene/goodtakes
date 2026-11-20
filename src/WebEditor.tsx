@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Brand } from './Brand'
 import { BrowserSession, MAX_FILE, type Sequence } from './web/session'
-import { suggest, srt, visibleCues, type Cut } from './web/editorial'
+import { montage, suggest, srt, visibleCues, type Cut } from './web/editorial'
 
 type Export = { url: string; file: File; captionsUrl: string | null }
 type Shape = 'vertical' | 'landscape'
@@ -150,6 +150,8 @@ export default function WebEditor() {
       const result = await session.analyze(sources, voice, language, update)
       if (!current()) return
       const options = suggest(result.cues, length, result.duration, brief)
+      const edited = montage(result.clips.map(clip => clip.frames / 30), result.cues, length, brief, Boolean(voice))
+      if (edited.ranges) options.unshift(edited)
       setAnalysis(result)
       setCuts(options)
       select(options[0], 0)
@@ -160,7 +162,7 @@ export default function WebEditor() {
     if (!analysis) return
     void work(previewOnly ? 'Preparing preview' : 'Preparing export', async (session, update, current) => {
       const result = await session.export(analysis, {
-        start, end, shape, captions: burn, preview: previewOnly,
+        start, end, shape, captions: burn, preview: previewOnly, ranges: cuts[selected]?.ranges,
       }, update)
       if (!current()) return
       if (previewOnly) {
@@ -188,7 +190,10 @@ export default function WebEditor() {
   }
 
   const reviewing = analysis !== null
-  const currentCaptions = analysis ? visibleCues(analysis.cues, start, end) : []
+  const editRanges = cuts[selected]?.ranges
+  const currentCaptions = analysis ? (editRanges && !voice
+    ? analysis.cues.filter(cue => editRanges.some(range => visibleCues([cue], range.start, range.end).length))
+    : visibleCues(analysis.cues, start, end)) : []
   const caption = burn && currentCaptions.find(cue => cue.start <= time && cue.end > time)?.text
   const activeDuration = end - start
   const valid = Number.isFinite(activeDuration) && start >= 0 && !!analysis && end <= analysis.duration + .01 && activeDuration >= 1 && activeDuration <= 60.01
@@ -206,7 +211,7 @@ export default function WebEditor() {
   }
 
   function sourcePlayer() {
-    if (sources.length > 1 || voice || previewUnavailable) {
+    if (editRanges || sources.length > 1 || voice || previewUnavailable) {
       return <>
         {previewUrl && <video className="web-export-preview" src={previewUrl} controls playsInline preload="metadata" />}
         {!previewUrl && <button className="primary" disabled={!valid || !!stage} onClick={() => renderReel(true)}>Preview reel</button>}
@@ -225,7 +230,7 @@ export default function WebEditor() {
           if (!video.paused && video.currentTime >= end) video.pause()
           setTime(video.currentTime)
         }} />
-      {caption && <p className="web-caption">{caption}</p>}
+      {caption && <p className="web-caption">{caption.toUpperCase()}</p>}
     </div>
   }
 
@@ -242,7 +247,7 @@ export default function WebEditor() {
       {!reviewing && <div className="import-layout">
         <section className="surface stack">
           <div><span className="eyebrow">GOODTAKE WEB EDITOR</span><h1>Make a reel</h1>
-            <p>Add clips from Photos or Files. GoodTake joins them in the order below and suggests a reel with captions.</p></div>
+            <p>Add clips from Photos or Files. GoodTake picks short excerpts and cuts them together into a reel.</p></div>
           <div className="drop-zone" onDragOver={e => e.preventDefault()} onDrop={e => {
             e.preventDefault()
             if (!stage) addFiles(Array.from(e.dataTransfer.files))
@@ -297,20 +302,20 @@ export default function WebEditor() {
           {!analysis.cues.length && <p>No clear speech was found. You can still trim and export the clip.</p>}
           {cuts.map((cut, index) => <button key={`${cut.start}-${cut.end}`} className="take-choice" aria-pressed={selected === index}
             disabled={!!stage} onClick={() => select(cut, index)}><span>{cut.opening}</span>
-            <small>{clock(cut.start)} to {clock(cut.end)} · {Math.round(cut.end - cut.start)} seconds</small></button>)}
+            <small>{cut.ranges ? `${cut.ranges.length} shots · ` : `${clock(cut.start)} to ${clock(cut.end)} · `}{Math.round(cut.end - cut.start)} seconds</small></button>)}
           {sources.length > 1 && analysis.duration <= 60 && <button disabled={!!stage}
             onClick={() => select({ start: 0, end: analysis.duration, opening: '' }, -1)}>Use full sequence</button>}
-          <div className="settings-row">
+          {!editRanges && <div className="settings-row">
             <label>Start, sec<input type="number" min={0} max={end - 1} step="0.01" inputMode="decimal" value={start}
               disabled={!!stage} onChange={e => updateTrim('start', Number(e.target.value))} /></label>
             <label>End, sec<input type="number" min={start + 1} max={sliderTime(analysis.duration)} step="0.01" inputMode="decimal" value={end}
               disabled={!!stage} onChange={e => updateTrim('end', Number(e.target.value))} /></label>
-          </div>
+          </div>}
           <label>Format<select value={shape} onChange={e => { setShape(e.target.value as Shape); clearRender() }} disabled={!!stage}>
             <option value="vertical">Vertical · 9:16</option><option value="landscape">Landscape · 16:9</option></select></label>
           {currentCaptions.length > 0 && <details><summary>Edit captions</summary><div className="caption-fields">
             {currentCaptions.map(cue => <label key={cue.id}>{clock(cue.start)}
-              <textarea rows={2} maxLength={220} value={cue.text} disabled={!!stage} onChange={e => {
+              <textarea rows={2} maxLength={220} value={cue.text.toUpperCase()} disabled={!!stage} onChange={e => {
                 const text = e.target.value
                 setAnalysis({ ...analysis, cues: analysis.cues.map(item => item.id === cue.id ? { ...item, text } : item) })
                 clearRender()

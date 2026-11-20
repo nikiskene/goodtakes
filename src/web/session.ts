@@ -2,7 +2,7 @@ import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg'
 import coreUrl from '@ffmpeg/core?url'
 import wasmUrl from '@ffmpeg/core/wasm?url'
 import fontUrl from '../../assets/DejaVuSans-Bold.ttf?url'
-import { ass, cutCues, groupCaptions, type Cue, type SpeechItem } from './editorial'
+import { ass, cutCues, groupCaptions, type Cue, type Range, type SpeechItem } from './editorial'
 
 export const MAX_FILE = 220 * 1024 ** 2
 export const MAX_DURATION = 180
@@ -188,13 +188,16 @@ export class BrowserSession {
   }
 
   async export(sequence: Sequence, options: {
-    start: number; end: number; shape: Shape; captions: boolean; preview?: boolean
+    start: number; end: number; shape: Shape; captions: boolean; preview?: boolean; ranges?: Range[]
   }, stage: Work) {
     const { start, end, shape, captions, preview } = options
-    const startFrame = Math.round(start * FPS)
-    const endFrame = Math.min(Math.round(sequence.duration * FPS), Math.round(end * FPS))
-    if (!Number.isFinite(startFrame) || !Number.isFinite(endFrame) || startFrame < 0
-        || endFrame - startFrame < FPS || endFrame - startFrame > 60 * FPS) {
+    const ranges = (options.ranges ?? [{ start, end }]).map(range => ({
+      start: Math.round(range.start * FPS),
+      end: Math.min(Math.round(sequence.duration * FPS), Math.round(range.end * FPS)),
+    }))
+    const totalFrames = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
+    if (ranges.some(range => !Number.isFinite(range.start) || !(range.end > range.start) || range.start < 0)
+        || totalFrames < FPS || totalFrames > 60 * FPS) {
       throw new Error('Choose a reel between 1 and 60 seconds.')
     }
     this.speech?.terminate()
@@ -202,11 +205,19 @@ export class BrowserSession {
     await this.ready(stage)
     const [long, short] = preview ? [640, 360] : [1280, 720]
     const [width, height] = shape === 'vertical' ? [short, long] : [long, short]
-    const outputCues = cutCues(sequence.cues, startFrame / FPS, endFrame / FPS)
+    const continuousVoice = Boolean(sequence.voice && options.ranges)
+    const audioRanges = continuousVoice ? [{ start: 0, end: totalFrames }] : ranges
+    let cueOffset = 0
+    const outputCues = audioRanges.flatMap(range => {
+      const cues = cutCues(sequence.cues, range.start / FPS, range.end / FPS)
+        .map(cue => ({ ...cue, start: cue.start + cueOffset, end: cue.end + cueOffset }))
+      cueOffset += (range.end - range.start) / FPS
+      return cues
+    })
     const burn = captions && outputCues.length > 0
     const tempFiles = ['/captions.ass', '/sequence.txt', '/soundtrack.pcm', '/reel.mp4']
     const parts: string[] = []
-    let offset = 0
+    let renderedFrames = 0
     let fontFamily = 'DejaVu Sans'
 
     try {
@@ -221,43 +232,54 @@ export class BrowserSession {
         await this.media.writeFile(tempFont, new Uint8Array(await font.arrayBuffer()))
       }
 
-      for (const clip of sequence.clips) {
-        const clipStart = offset
-        offset += clip.frames
-        const inFrame = Math.max(startFrame, clipStart)
-        const outFrame = Math.min(endFrame, offset)
-        if (outFrame <= inFrame) continue
-        const number = parts.length + 1
-        const part = `/part-${number}.mp4`
-        parts.push(part)
-        tempFiles.push(part)
-        stage(`${preview ? 'Preparing preview' : 'Rendering'} · clip ${number}`)
-        const clipCues = outputCues.flatMap(cue => {
-          const begin = (inFrame - startFrame) / FPS
-          const finish = (outFrame - startFrame) / FPS
-          return cue.start < finish && cue.end > begin
-            ? [{ ...cue, start: Math.max(0, cue.start - begin), end: Math.min(finish, cue.end) - begin }]
-            : []
-        })
-        if (burn) await this.media.writeFile('/captions.ass', ass(clipCues, width, height, fontFamily))
-        const filters = [
-          `scale=${width}:${height}:force_original_aspect_ratio=increase:force_divisible_by=2${clip.hdr ? '' : ':out_color_matrix=bt709'}`,
-          `crop=${width}:${height}`, 'setsar=1', 'fps=30', 'tpad=stop_mode=clone:stop_duration=0.1',
-          ...(clip.hdr ? ['zscale=t=linear:npl=100', 'format=gbrpf32le', 'zscale=p=bt709', 'tonemap=mobius:desat=1.5',
-            'zscale=t=bt709:m=bt709:r=limited'] : []),
-          'format=yuv420p', ...(burn && clipCues.length ? ['ass=/captions.ass:fontsdir=/fonts'] : []),
-        ]
-        const status = await this.withFile(clip.file, name => this.media.exec([
-          '-v', 'error', '-ss', ((inFrame - clipStart) / FPS).toFixed(6), '-i', name,
-          '-map', '0:V:0', '-an', '-frames:v', String(outFrame - inFrame), '-vf', filters.join(','),
-          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-threads', '1',
-          '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_primaries', 'bt709', part,
-        ]))
-        if (status !== 0) throw new Error(`GoodTake couldn’t render ${clip.file.name}.`)
+      for (const { start: startFrame, end: endFrame } of ranges) {
+        let sourceOffset = 0
+        for (const clip of sequence.clips) {
+          const clipStart = sourceOffset
+          sourceOffset += clip.frames
+          const inFrame = Math.max(startFrame, clipStart)
+          const outFrame = Math.min(endFrame, sourceOffset)
+          if (outFrame <= inFrame) continue
+          const frames = outFrame - inFrame
+          const begin = renderedFrames / FPS
+          renderedFrames += frames
+          const finish = renderedFrames / FPS
+          const number = parts.length + 1
+          const part = `/part-${number}.mp4`
+          parts.push(part)
+          tempFiles.push(part)
+          stage(`${preview ? 'Preparing preview' : 'Rendering'} · clip ${number}`)
+          const clipCues = outputCues.flatMap(cue => {
+            return cue.start < finish && cue.end > begin
+              ? [{ ...cue, start: Math.max(0, cue.start - begin), end: Math.min(finish, cue.end) - begin }]
+              : []
+          })
+          if (burn) await this.media.writeFile('/captions.ass', ass(clipCues, width, height, fontFamily))
+          const filters = [
+            `scale=${width}:${height}:force_original_aspect_ratio=increase:force_divisible_by=2${clip.hdr ? '' : ':out_color_matrix=bt709'}`,
+            `crop=${width}:${height}`, 'setsar=1', 'fps=30', 'tpad=stop_mode=clone:stop_duration=0.1',
+            ...(clip.hdr ? ['zscale=t=linear:npl=100', 'format=gbrpf32le', 'zscale=p=bt709', 'tonemap=mobius:desat=1.5',
+              'zscale=t=bt709:m=bt709:r=limited'] : []),
+            'format=yuv420p', ...(burn && clipCues.length ? ['ass=/captions.ass:fontsdir=/fonts'] : []),
+          ]
+          const status = await this.withFile(clip.file, name => this.media.exec([
+            '-v', 'error', '-ss', ((inFrame - clipStart) / FPS).toFixed(6), '-i', name,
+            '-map', '0:V:0', '-an', '-frames:v', String(outFrame - inFrame), '-vf', filters.join(','),
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-threads', '1',
+            '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_primaries', 'bt709', part,
+          ]))
+          if (status !== 0) throw new Error(`GoodTake couldn’t render ${clip.file.name}.`)
+        }
       }
 
       stage('Adding the soundtrack')
-      const pcm = await this.soundtrack(sequence.clips, sequence.voice, startFrame, endFrame, 48000, 2)
+      const pcm = new Uint8Array(totalFrames * 6400)
+      let audioOffset = 0
+      for (const range of audioRanges) {
+        const segment = await this.soundtrack(sequence.clips, sequence.voice, range.start, range.end, 48000, 2)
+        pcm.set(segment, audioOffset)
+        audioOffset += segment.length
+      }
       await this.media.writeFile('/soundtrack.pcm', pcm)
       await this.media.writeFile('/sequence.txt', parts.map(part => `file '${part}'`).join('\n'))
       const status = await this.media.exec([
