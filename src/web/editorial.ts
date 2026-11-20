@@ -204,13 +204,26 @@ export function suggest(cues: Cue[], maximum: number, sourceLength: number, brie
   return cuts.length ? cuts : [{ start: 0, end: Math.min(sourceLength, maximum, 8), opening: cues[0]?.text || 'Start of recording' }]
 }
 
-export function visibleCues(cues: Cue[], start: number, end: number) {
-  return cues.filter(cue => Math.min(end, cue.end) - Math.max(start, cue.start) >= .18)
-}
-
-export function cutCues(cues: Cue[], start: number, end: number) {
-  return visibleCues(cues, start, end).filter(cue => cue.text.trim())
-    .map(cue => ({ ...cue, start: Math.max(0, cue.start - start), end: Math.min(end, cue.end) - start }))
+export function reelCues(cues: Cue[], audioRanges: Range[]) {
+  const timeline: Cue[] = []
+  let offset = 0
+  for (const { start, end } of audioRanges) {
+    for (const cue of cues) {
+      const from = Math.max(cue.start, start)
+      const to = Math.min(cue.end, end)
+      if (to <= from || !cue.text.trim()) continue
+      const outputStart = offset + (from - start)
+      const outputEnd = offset + (to - start)
+      const previous = timeline.at(-1)
+      if (previous?.id === cue.id && Math.abs(previous.end - outputStart) < 1e-6) {
+        previous.end = outputEnd
+      } else {
+        timeline.push({ ...cue, start: outputStart, end: outputEnd })
+      }
+    }
+    offset += end - start
+  }
+  return timeline
 }
 
 function stamp(time: number, ass: boolean) {
@@ -234,7 +247,7 @@ WrapStyle: 0
 ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: GoodTake,${fontFamily},${vertical ? 37 : 33},&H00FFFFFF,&H00FFFFFF,&H00131313,&H90000000,-1,0,0,0,100,100,0,0,1,2,1,2,42,42,${vertical ? 142 : 66},1
+Style: GoodTake,${fontFamily},${vertical ? 44 : 38},&H00FFFFFF,&H00FFFFFF,&H00131313,&H90000000,-1,0,0,0,100,100,0,0,1,3,1,2,48,48,${vertical ? 198 : 94},1
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 `

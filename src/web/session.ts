@@ -2,7 +2,7 @@ import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg'
 import coreUrl from '@ffmpeg/core?url'
 import wasmUrl from '@ffmpeg/core/wasm?url'
 import fontUrl from '../../assets/DejaVuSans-Bold.ttf?url'
-import { ass, cutCues, groupCaptions, type Cue, type Range, type VisualBeat, type SpeechItem } from './editorial'
+import { ass, reelCues, groupCaptions, type Cue, type Range, type VisualBeat, type SpeechItem } from './editorial'
 
 export const MAX_FILE = 220 * 1024 ** 2
 export const MAX_DURATION = 180
@@ -14,6 +14,22 @@ export type Sequence = { clips: Clip[]; voice: File | null; voiceDuration?: numb
 type Work = (stage: string) => void
 type Shape = 'vertical' | 'landscape'
 type SpeechResponse = { stage?: string; chunks?: SpeechItem[]; error?: string }
+type Edit = { start: number; end: number; ranges?: Range[]; audioRanges?: Range[] }
+
+export function reelTimeline(sequence: Sequence, edit: Edit) {
+  const toFrames = (range: Range) => ({
+    start: Math.round(range.start * FPS),
+    zoom: range.zoom ?? 1,
+    end: Math.min(Math.round(sequence.duration * FPS), Math.round(range.end * FPS)),
+  })
+  const ranges = (edit.ranges ?? [edit]).map(toFrames)
+  const totalFrames = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
+  const audioRanges = sequence.voice && edit.ranges
+    ? [{ start: 0, end: totalFrames }]
+    : edit.audioRanges?.map(toFrames) ?? ranges
+  const cues = reelCues(sequence.cues, audioRanges.map(({ start, end }) => ({ start: start / FPS, end: end / FPS })))
+  return { ranges, totalFrames, audioRanges, cues }
+}
 
 function absolute(url: string) {
   return new URL(url, document.baseURI).href
@@ -241,17 +257,11 @@ export class BrowserSession {
     })
   }
 
-  async export(sequence: Sequence, options: {
-    start: number; end: number; maximum: number; shape: Shape; captions: boolean; preview?: boolean; ranges?: Range[]; audioRanges?: Range[]
+  async export(sequence: Sequence, options: Edit & {
+    maximum: number; shape: Shape; captions: boolean; preview?: boolean
   }, stage: Work) {
-    const { start, end, maximum, shape, captions, preview } = options
-    const toFrames = (range: Range) => ({
-      start: Math.round(range.start * FPS),
-      zoom: range.zoom ?? 1,
-      end: Math.min(Math.round(sequence.duration * FPS), Math.round(range.end * FPS)),
-    })
-    const ranges = (options.ranges ?? [{ start, end }]).map(toFrames)
-    const totalFrames = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
+    const { maximum, shape, captions, preview } = options
+    const { ranges, totalFrames, audioRanges, cues: outputCues } = reelTimeline(sequence, options)
     if (ranges.some(range => !Number.isFinite(range.start) || !(range.end > range.start) || range.start < 0)
         || totalFrames < FPS || totalFrames > Math.floor(maximum * FPS)) {
       throw new Error(`Choose a reel between 1 and ${maximum} seconds.`)
@@ -261,15 +271,6 @@ export class BrowserSession {
     await this.ready(stage)
     const [long, short] = preview ? [640, 360] : [1280, 720]
     const [width, height] = shape === 'vertical' ? [short, long] : [long, short]
-    const continuousVoice = Boolean(sequence.voice && options.ranges)
-    const audioRanges = continuousVoice ? [{ start: 0, end: totalFrames }] : options.audioRanges?.map(toFrames) ?? ranges
-    let cueOffset = 0
-    const outputCues = audioRanges.flatMap(range => {
-      const cues = cutCues(sequence.cues, range.start / FPS, range.end / FPS)
-        .map(cue => ({ ...cue, start: cue.start + cueOffset, end: cue.end + cueOffset }))
-      cueOffset += (range.end - range.start) / FPS
-      return cues
-    })
     const burn = captions && outputCues.length > 0
     const tempFiles = ['/captions.ass', '/sequence.txt', '/soundtrack.pcm', '/reel.mp4']
     const parts: { file: string; frames: number }[] = []

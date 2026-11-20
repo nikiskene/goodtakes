@@ -1,44 +1,74 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 import { createClient, type Session } from '@supabase/supabase-js'
 import type { Aspect, Preferences, Style } from './types'
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+const callback = new URLSearchParams(window.location.hash.slice(1))
+const callbackType = callback.get('type')
+const emailConfirmed = callbackType === 'signup' && callback.has('access_token')
+if (emailConfirmed) {
+  window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+}
 const cloud = url && key ? createClient(url, key, {
-  auth: { detectSessionInUrl: false, autoRefreshToken: true, persistSession: true },
+  auth: { flowType: 'implicit', autoRefreshToken: true, persistSession: true },
 }) : null
 
+type AuthState = { session: Session | null | undefined; recovering: boolean }
+let authState: AuthState = { session: cloud ? undefined : null, recovering: callbackType === 'recovery' }
+const authListeners = new Set<() => void>()
+function setAuth(state: AuthState) {
+  authState = state
+  authListeners.forEach(listener => listener())
+}
+function subscribe(listener: () => void) {
+  authListeners.add(listener)
+  return () => { authListeners.delete(listener) }
+}
+function authSnapshot() { return authState }
+
+cloud?.auth.onAuthStateChange((event, session) => {
+  setAuth({ session, recovering: !!session && (event === 'PASSWORD_RECOVERY' || authState.recovering) })
+})
+
+export function useProfileAuth() {
+  return useSyncExternalStore(subscribe, authSnapshot)
+}
+
+export async function verifyEditorSession() {
+  if (!cloud || !authState.session || authState.recovering) throw new Error('Sign in to use the editor.')
+  const { data, error } = await cloud.auth.getUser()
+  if (error) throw error
+  if (!data.user || data.user.id !== authState.session?.user.id || authState.recovering) {
+    throw new Error('Sign in to use the editor.')
+  }
+}
+
+type AuthMode = 'signin' | 'signup' | 'reset'
+
 export function Profile({ preferences, onChange, onClose }: {
-  preferences?: Preferences; onChange?: (prefs: Preferences) => void; onClose: () => void
+  preferences?: Preferences; onChange?: (prefs: Preferences) => void; onClose?: () => void
 }) {
-  const [session, setSession] = useState<Session | null>(null)
+  const { session, recovering } = useProfileAuth()
+  const [mode, setMode] = useState<AuthMode>('signin')
   const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
-  const [sent, setSent] = useState(false)
+  const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [isOwner, setIsOwner] = useState(false)
   const [exportAccess, setExportAccess] = useState(false)
   const [pick, setPick] = useState({ aspect: true, style: true })
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState(emailConfirmed && !session ? 'Email confirmed. Sign in with your password.' : '')
   const [busy, setBusy] = useState(false)
   const userId = session?.user.id
   const lastUser = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    if (!cloud) return
-    const { data: { subscription } } = cloud.auth.onAuthStateChange((_, next) => {
-      if (lastUser.current !== next?.user.id) {
-        lastUser.current = next?.user.id
-        setName('')
-        setIsOwner(false)
-        setExportAccess(false)
-      }
-      setSession(next)
-    })
-    return () => subscription.unsubscribe()
-  }, [])
-
-  useEffect(() => {
+    if (lastUser.current !== userId) {
+      lastUser.current = userId
+      setName('')
+      setIsOwner(false)
+      setExportAccess(false)
+    }
     if (!cloud || !userId) return
     let active = true
     void cloud.from('goodtake_profiles').select('display_name').eq('user_id', userId).maybeSingle()
@@ -58,32 +88,66 @@ export function Profile({ preferences, onChange, onClose }: {
     finally { setBusy(false) }
   }
 
-  function signIn(event: FormEvent) {
+  function changeMode(next: AuthMode) {
+    setMode(next)
+    setPassword('')
+    setMessage('')
+  }
+
+  function submitAuth(event: FormEvent) {
     event.preventDefault()
     if (!cloud) return
     const client = cloud
+    const redirect = preferences ? undefined : new URL('/editor', window.location.origin).href
     void run(async () => {
-      if (sent) {
-        const { error } = await client.auth.verifyOtp({ email, token: code.trim(), type: 'email' })
+      if (recovering) {
+        const { error } = await client.auth.updateUser({ password })
         if (error) throw error
-        return 'Signed in.'
+        setPassword('')
+        setAuth({ ...authState, recovering: false })
+        return 'Password updated.'
       }
-      const { error } = await client.auth.signInWithOtp({ email })
+      if (mode === 'reset') {
+        const { error } = await client.auth.resetPasswordForEmail(email.trim(), { redirectTo: redirect })
+        if (error) throw error
+        return 'If this email has an account, you’ll receive a password reset link.'
+      }
+      if (mode === 'signup') {
+        const { data, error } = await client.auth.signUp({
+          email: email.trim(), password, options: { emailRedirectTo: redirect },
+        })
+        if (error) throw error
+        setPassword('')
+        setMode('signin')
+        return data.session ? 'Account created.' : 'Check your email to confirm your address, then sign in with your password.'
+      }
+      const { error } = await client.auth.signInWithPassword({ email: email.trim(), password })
       if (error) throw error
-      setSent(true)
-      return 'Enter the code from your email.'
+      setPassword('')
+      return 'Signed in.'
     })
   }
 
+  const heading = recovering ? 'Choose a new password' : userId ? 'Your profile'
+    : mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : 'Sign in to GoodTake'
   return <div className="profile-card" role="region" aria-labelledby="profile-heading">
-    <div className="section-heading"><h2 id="profile-heading">Your profile</h2><button onClick={onClose} aria-label="Close profile">Close</button></div>
-    {!cloud ? <p>Sign-in is unavailable in this build.</p> :
-      !userId ? <form className="stack" onSubmit={signIn}>
-        <p>{preferences ? "Sign in to keep a profile and sync the preferences you choose between devices." : "Sign in with an email code to manage your GoodTake profile."}</p>
-        <label>Email<input type="email" autoComplete="email" required value={email} disabled={sent} onChange={e => setEmail(e.target.value)} /></label>
-        {sent && <label>Email code<input autoComplete="one-time-code" inputMode="numeric" required value={code} onChange={e => setCode(e.target.value)} /></label>}
-        <div className="actions"><button className="primary" disabled={busy}>{sent ? 'Verify code' : 'Email me a code'}</button>
-          {sent && <button type="button" onClick={() => setSent(false)}>Use another email</button>}</div>
+    <div className="section-heading"><h2 id="profile-heading">{heading}</h2>
+      {onClose && <button onClick={onClose} aria-label="Close profile">Close</button>}</div>
+    {!cloud ? <p>Sign-in is unavailable in this build.</p> : session === undefined ? <p role="status">Checking your session…</p> :
+      !session || recovering ? <form className="stack" onSubmit={submitAuth}>
+        {!recovering && <label>Email<input type="email" autoComplete="username" autoCapitalize="none" required value={email} disabled={busy} onChange={e => setEmail(e.target.value)} /></label>}
+        {(recovering || mode !== 'reset') && <label>{recovering ? 'New password' : 'Password'}<input type="password" required
+          autoComplete={recovering || mode === 'signup' ? 'new-password' : 'current-password'}
+          minLength={recovering || mode === 'signup' ? 8 : undefined}
+          value={password} disabled={busy} onChange={e => setPassword(e.target.value)} /></label>}
+        <div className="actions">
+          <button className="primary" type="submit" disabled={busy}>{recovering ? 'Save new password'
+            : mode === 'signup' ? 'Create account' : mode === 'reset' ? 'Send reset email' : 'Sign in'}</button>
+          {!recovering && (mode === 'signin'
+            ? <><button type="button" disabled={busy} onClick={() => changeMode('signup')}>Create account</button>
+              <button type="button" disabled={busy} onClick={() => changeMode('reset')}>Forgot password?</button></>
+            : <button type="button" disabled={busy} onClick={() => changeMode('signin')}>Back to sign in</button>)}
+        </div>
       </form> : <div className="stack">
         <p>{session.user.email}{isOwner && <small className="role-label">Owner</small>}</p>
         {exportAccess && <p>Paid export access is active.</p>}
@@ -124,8 +188,7 @@ export function Profile({ preferences, onChange, onClose }: {
           <button disabled={busy} onClick={() => void run(async () => {
             const { error } = await cloud.auth.signOut({ scope: 'local' })
             if (error) throw error
-            setSent(false)
-            setCode('')
+            changeMode('signin')
             setName('')
             setIsOwner(false)
             setExportAccess(false)

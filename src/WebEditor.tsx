@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Brand } from './Brand'
-import { Profile } from './Profile'
-import { BrowserSession, MAX_FILE, type Sequence } from './web/session'
-import { montage, suggest, srt, visibleCues, type Cut } from './web/editorial'
+import { Profile, useProfileAuth, verifyEditorSession } from './Profile'
+import { BrowserSession, MAX_FILE, reelTimeline, type Sequence } from './web/session'
+import { montage, suggest, srt, type Cut } from './web/editorial'
 
 type Export = { url: string; file: File; captionsUrl: string | null }
 type Shape = 'vertical' | 'landscape'
@@ -16,6 +16,22 @@ function sliderTime(seconds: number) {
 }
 
 export default function WebEditor() {
+  const { session, recovering } = useProfileAuth()
+  if (session && !recovering) return <WebWorkspace key={session.user.id} />
+
+  return <div className="desktop-app web-editor">
+    <header className="app-bar"><a href="/" aria-label="GoodTake home"><Brand /></a></header>
+    <main className="app-shell">
+      {!recovering && <div className="surface stack">
+        <h1>Make a reel</h1>
+        <p>Create an account or sign in to start editing. Your clips and voice recordings stay on this device.</p>
+      </div>}
+      <Profile />
+    </main>
+  </div>
+}
+
+function WebWorkspace() {
   const engine = useRef<BrowserSession | null>(null)
   const active = useRef<symbol | null>(null)
   const preview = useRef<HTMLVideoElement>(null)
@@ -34,7 +50,6 @@ export default function WebEditor() {
   const [selected, setSelected] = useState(0)
   const [start, setStart] = useState(0)
   const [end, setEnd] = useState(0)
-  const [time, setTime] = useState(0)
   const [burn, setBurn] = useState(true)
   const [stage, setStage] = useState('')
   const [error, setError] = useState('')
@@ -42,7 +57,10 @@ export default function WebEditor() {
   const [profileOpen, setProfileOpen] = useState(false)
   const [saved, setSaved] = useState<Export | null>(null)
 
-  useEffect(() => () => engine.current?.stop(), [])
+  useEffect(() => () => {
+    active.current = null
+    engine.current?.stop()
+  }, [])
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl) }, [previewUrl])
   useEffect(() => () => { if (sourceUrl) URL.revokeObjectURL(sourceUrl) }, [sourceUrl])
   useEffect(() => () => {
@@ -111,7 +129,6 @@ export default function WebEditor() {
     setSelected(index)
     setStart(sliderTime(cut.start))
     setEnd(sliderTime(cut.end))
-    setTime(cut.start)
     clearRender()
     if (preview.current) {
       preview.current.pause()
@@ -128,6 +145,8 @@ export default function WebEditor() {
     setError('')
     update(initial)
     try {
+      await verifyEditorSession()
+      if (!current()) return
       await operation(engine.current ??= new BrowserSession(), update, current)
     } catch (e) {
       if (current()) setError(e instanceof Error ? e.message : String(e))
@@ -193,10 +212,10 @@ export default function WebEditor() {
 
   const reviewing = analysis !== null
   const editRanges = cuts[selected]?.ranges
-  const currentCaptions = analysis ? (editRanges && !voice
-    ? analysis.cues.filter(cue => (cuts[selected]?.audioRanges ?? editRanges).some(range => visibleCues([cue], range.start, range.end).length))
-    : visibleCues(analysis.cues, start, end)) : []
-  const caption = burn && currentCaptions.find(cue => cue.start <= time && cue.end > time)?.text
+  const { cues: reelCaptions } = analysis
+    ? reelTimeline(analysis, { start, end, ranges: editRanges, audioRanges: cuts[selected]?.audioRanges })
+    : { cues: [] }
+  const currentCaptions = [...new Map(reelCaptions.map(cue => [cue.id, cue])).values()]
   const activeDuration = end - start
   const frameDuration = Math.round(end * 30) - Math.round(start * 30)
   const valid = Number.isFinite(frameDuration) && start >= 0 && !!analysis
@@ -209,13 +228,12 @@ export default function WebEditor() {
         preview.current.pause()
         preview.current.currentTime = value
       }
-      setTime(value)
     } else setEnd(value)
     clearRender()
   }
 
   function sourcePlayer() {
-    if (editRanges || sources.length > 1 || voice || previewUnavailable) {
+    if ((burn && reelCaptions.length) || editRanges || sources.length > 1 || voice || previewUnavailable) {
       return <>
         {previewUrl && <video className="web-export-preview" src={previewUrl} controls playsInline preload="metadata" />}
         {!previewUrl && <button className="primary" disabled={!valid || !!stage} onClick={() => renderReel(true)}>Preview reel</button>}
@@ -232,9 +250,7 @@ export default function WebEditor() {
         onTimeUpdate={e => {
           const video = e.currentTarget
           if (!video.paused && video.currentTime >= end) video.pause()
-          setTime(video.currentTime)
         }} />
-      {caption && <p className="web-caption">{caption.toUpperCase()}</p>}
     </div>
   }
 
@@ -308,7 +324,6 @@ export default function WebEditor() {
         </section>
         <section className="surface stack">
           <h2>Suggested takes</h2>
-          {!analysis.cues.length && <p>No clear speech was found. You can still trim and export the clip.</p>}
           {cuts.map((cut, index) => <button key={`${cut.start}-${cut.end}`} className="take-choice" aria-pressed={selected === index}
             disabled={!!stage} onClick={() => select(cut, index)}><span>{cut.opening}</span>
             <small>{cut.ranges ? `${cut.ranges.length} shots · ` : `${clock(cut.start)} to ${clock(cut.end)} · `}{Math.round(cut.end - cut.start)} seconds</small></button>)}
@@ -322,15 +337,19 @@ export default function WebEditor() {
           </div>}
           <label>Format<select value={shape} onChange={e => { setShape(e.target.value as Shape); clearRender() }} disabled={!!stage}>
             <option value="vertical">Vertical · 9:16</option><option value="landscape">Landscape · 16:9</option></select></label>
-          {currentCaptions.length > 0 && <details><summary>Edit captions</summary><div className="caption-fields">
+          {currentCaptions.length > 0 && <details><summary>Edit captions ({currentCaptions.length})</summary><div className="caption-fields">
             {currentCaptions.map(cue => <label key={cue.id}>{clock(cue.start)}
               <textarea rows={2} maxLength={220} value={cue.text.toUpperCase()} disabled={!!stage} onChange={e => {
                 const text = e.target.value
                 setAnalysis({ ...analysis, cues: analysis.cues.map(item => item.id === cue.id ? { ...item, text } : item) })
                 clearRender()
               }} /></label>)}</div></details>}
-          <label className="check"><input type="checkbox" checked={burn} disabled={!!stage}
-            onChange={e => { setBurn(e.target.checked); clearRender() }} /> Burn captions into video</label>
+          {currentCaptions.length > 0
+            ? <label className="check"><input type="checkbox" checked={burn} disabled={!!stage}
+              onChange={e => { setBurn(e.target.checked); clearRender() }} /> Burn captions into video</label>
+            : <p>{analysis.cues.length
+              ? 'This cut has no captions. Choose another take or adjust the trim.'
+              : 'No speech was detected. Check the audio language or add a voice recording, then run Find takes again.'}</p>}
           {!valid && <p>Choose a clip between 1 and {maximum} seconds inside your recording.</p>}
           <button className="primary" disabled={!valid || !!stage} onClick={() => renderReel(false)}>Export MP4</button>
           {saved && <div className="stack export-box" role="region" aria-label="Finished reel">
