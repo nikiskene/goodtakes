@@ -261,7 +261,7 @@ export class BrowserSession {
     })
     const burn = captions && outputCues.length > 0
     const tempFiles = ['/captions.ass', '/sequence.txt', '/soundtrack.pcm', '/reel.mp4']
-    const parts: string[] = []
+    const parts: { file: string; frames: number }[] = []
     let renderedFrames = 0
     let fontFamily = 'DejaVu Sans'
 
@@ -291,7 +291,7 @@ export class BrowserSession {
           const finish = renderedFrames / FPS
           const number = parts.length + 1
           const part = `/part-${number}.mp4`
-          parts.push(part)
+          parts.push({ file: part, frames })
           tempFiles.push(part)
           stage(`${preview ? 'Preparing preview' : 'Rendering'} · clip ${number}`)
           const clipCues = outputCues.flatMap(cue => {
@@ -302,7 +302,7 @@ export class BrowserSession {
           if (burn) await this.media.writeFile('/captions.ass', ass(clipCues, width, height, fontFamily))
           const filters = [
             `scale=${Math.ceil(width * zoom / 2) * 2}:${Math.ceil(height * zoom / 2) * 2}:force_original_aspect_ratio=increase:force_divisible_by=2${clip.hdr ? '' : ':out_color_matrix=bt709'}`,
-            `crop=${width}:${height}`, 'setsar=1', 'fps=30', 'tpad=stop_mode=clone:stop_duration=0.1',
+            `crop=${width}:${height}`, 'setsar=1', 'fps=30', 'setpts=PTS-STARTPTS', 'tpad=stop_mode=clone:stop_duration=0.1',
             ...(clip.hdr ? ['zscale=t=linear:npl=100', 'format=gbrpf32le', 'zscale=p=bt709', 'tonemap=mobius:desat=1.5',
               'zscale=t=bt709:m=bt709:r=limited'] : []),
             'format=yuv420p', ...(burn && clipCues.length ? ['ass=/captions.ass:fontsdir=/fonts'] : []),
@@ -311,7 +311,7 @@ export class BrowserSession {
             '-v', 'error', '-ss', ((inFrame - clipStart) / FPS).toFixed(6), '-i', name,
             '-map', '0:V:0', '-an', '-frames:v', String(outFrame - inFrame), '-vf', filters.join(','),
             '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-threads', '1',
-            '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_primaries', 'bt709', part,
+            '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-video_track_timescale', '30000', part,
           ]))
           if (status !== 0) throw new Error(`GoodTake couldn’t render ${clip.file.name}.`)
         }
@@ -326,12 +326,12 @@ export class BrowserSession {
         audioOffset += segment.length
       }
       await this.media.writeFile('/soundtrack.pcm', pcm)
-      await this.media.writeFile('/sequence.txt', parts.map(part => `file '${part}'`).join('\n'))
+      await this.media.writeFile('/sequence.txt', parts.map(part => `file '${part.file}'\nduration ${(part.frames / FPS).toFixed(6)}\n`).join(''))
       const status = await this.media.exec([
         '-v', 'error', '-f', 'concat', '-safe', '0', '-i', '/sequence.txt',
         '-f', 's16le', '-ar', '48000', '-ac', '2', '-i', '/soundtrack.pcm',
         '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k',
-        '-movflags', '+faststart', '/reel.mp4',
+        '-video_track_timescale', '30000', '-movflags', '+faststart', '/reel.mp4',
       ])
       if (status !== 0) throw new Error('GoodTake couldn’t combine the video and soundtrack.')
       const output = await this.media.readFile('/reel.mp4')
