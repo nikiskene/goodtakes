@@ -34,7 +34,7 @@ self.onmessage = async ({ data }: MessageEvent<Request>) => {
       chunk_length_s: 27,
       stride_length_s: 4,
       task: 'transcribe',
-      ...(data.language ? { language: data.language } : {}),
+      language: data.language,
     })
     const output = Array.isArray(result) ? result[0] : result
     self.postMessage({ chunks: output.chunks ?? [] })

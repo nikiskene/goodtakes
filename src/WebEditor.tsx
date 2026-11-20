@@ -25,7 +25,7 @@ export default function WebEditor() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [brief, setBrief] = useState('')
   const [length, setLength] = useState(45)
-  const [language, setLanguage] = useState('')
+  const [language, setLanguage] = useState('english')
   const [shape, setShape] = useState<Shape>('vertical')
   const [cuts, setCuts] = useState<Cut[]>([])
   const [selected, setSelected] = useState(0)
@@ -209,7 +209,7 @@ export default function WebEditor() {
             <label>Format<select value={shape} onChange={e => setShape(e.target.value as Shape)} disabled={!!stage}>
               <option value="vertical">Vertical · 9:16</option><option value="landscape">Landscape · 16:9</option></select></label>
             <label>Audio language<select value={language} onChange={e => setLanguage(e.target.value)} disabled={!!stage}>
-              <option value="">Auto-detect</option><option value="english">English</option><option value="german">German</option>
+              <option value="english">English</option><option value="german">German</option>
               <option value="spanish">Spanish</option><option value="french">French</option><option value="chinese">Chinese</option></select></label>
           </div>
           <button className="primary" disabled={!source || !!stage} onClick={find}>Find takes <span aria-hidden="true">→</span></button>
