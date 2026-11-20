@@ -16,6 +16,24 @@ def dependencies(binary):
             if (match := re.match(r"\s+(\S+) \(compatibility version", line))]
 
 
+def resolve(load_path, origin, target, executable_dir):
+    binary = origin or target
+    directory = binary.parent
+    if load_path.startswith("@loader_path/"):
+        return directory / load_path.removeprefix("@loader_path/")
+    if load_path.startswith("@executable_path/"):
+        return executable_dir / load_path.removeprefix("@executable_path/")
+    if not load_path.startswith("@rpath/"):
+        return Path(load_path)
+    relative = load_path.removeprefix("@rpath/")
+    search = [directory, Path("/opt/homebrew/lib")]
+    commands = execute("otool", "-l", binary)
+    for entry in re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset", commands):
+        value = entry.replace("@loader_path", str(directory)).replace("@executable_path", str(executable_dir))
+        search.insert(0, Path(value))
+    return next((folder / relative for folder in search if (folder / relative).is_file()), Path(load_path))
+
+
 def bundle(runtime):
     pending = [(runtime / name, None) for name in ("ffmpeg", "ffprobe")]
     handled = set()
@@ -32,9 +50,7 @@ def bundle(runtime):
             if origin and (load_path == str(origin) or Path(load_path).name == origin.name and load_path.startswith("@rpath/")):
                 execute("install_name_tool", "-id", f"@loader_path/{target.name}", target)
                 continue
-            path = Path(load_path)
-            if load_path.startswith("@loader_path/") and origin:
-                path = origin.parent / load_path.removeprefix("@loader_path/")
+            path = resolve(load_path, origin, target, runtime)
             if not path.is_absolute() or not path.is_file():
                 raise SystemExit(f"Cannot relocate {load_path} used by {target.name}.")
             resolved = path.resolve()

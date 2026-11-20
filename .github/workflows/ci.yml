@@ -2,7 +2,7 @@ name: GoodTake CI
 on:
   pull_request:
   push:
-    branches: [main, 'goodtake/**']
+    branches: [main]
 permissions:
   contents: read
 jobs:
@@ -23,7 +23,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg cmake fonts-dejavu-core
+      - run: |
+          if ! command -v ffmpeg || ! ffmpeg -hide_banner -filters | grep -w flite; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=25 update
+            sudo apt-get install -y ffmpeg
+          fi
+          cmake --version
       - run: bash scripts/setup-runtime.sh
       - run: |
           curl -fL --retry 2 https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin -o "$RUNNER_TEMP/ggml-tiny.bin"

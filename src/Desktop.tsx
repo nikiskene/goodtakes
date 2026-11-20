@@ -65,7 +65,7 @@ export default function Desktop() {
 
   async function native<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
     if (currentJob.current) throw new Error('A job is already running.')
-    const id = crypto.randomUUID().replaceAll('-', '')
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
     currentJob.current = id
     setJob(id)
     setStage('Working locally')

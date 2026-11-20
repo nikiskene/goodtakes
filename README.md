@@ -31,11 +31,11 @@ Install Homebrew `cmake`, `pkgconf`, `libass` and `zimg`. Run `npm ci` and `bash
 
 Connect the repo and select the branch containing the editor, or use `main` once the draft PR is merged. Netlify reads `netlify.toml` and publishes `dist` with Node 22. The sample reel on the page uses an original script, a generated title card and synthesized narration. Netlify serves the demo on desktop and mobile. It never receives project media or renders a reel.
 
-The default Mac downloads link is the GitHub Releases page. Set `VITE_DESKTOP_DOWNLOAD_URL` to a published download if you want to link to it directly.
+The default Mac build link shows the GitHub Actions packaging workflow. Set `VITE_DESKTOP_DOWNLOAD_URL` to a published download if you want to link to it directly.
 
 ## Supabase profiles
 
-Run the single [profiles and preferences migration](supabase/migrations/20261120000000_profiles_and_preferences.sql) in Supabase SQL Editor. Configure the email sign-in template to include `{{ .Token }}` so the desktop app can verify a one-time code. Set the project URL and publishable key in an ignored `.env.local` based on `.env.example`, or use the `VITE_SUPABASE_PUBLISHABLE_KEY` GitHub Actions repository variable for packaged builds. Local editing works with these values omitted.
+Run the single [profiles and preferences migration](supabase/migrations/20261120000000_profiles_and_preferences.sql) in Supabase SQL Editor. Configure the email sign-in template to include `{{ .Token }}` so the desktop app can verify a one-time code. Set the project URL and publishable key in an ignored `.env.local` based on `.env.example`, to enable profiles in local development. The packaging workflow uses this project’s publishable key by default and accepts the `VITE_SUPABASE_PUBLISHABLE_KEY` GitHub Actions repository variable to override it. Local editing works with profiles disabled.
 
 A profile can store a display name and an explicitly selected default format and caption style. Each profile and preference row is keyed to the signed-in user’s Supabase Auth ID, with owner-only row-level security. The app can read a signed-in user’s assigned role. Role changes require an administrator or server-side operation. The account ID can also anchor future paid entitlements. When billing is introduced, payment webhooks should update entitlement state with server credentials, separate from user-editable profiles. Billing and access restrictions are outside this release.
 

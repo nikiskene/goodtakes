@@ -22,9 +22,13 @@ jobs:
       - run: bash scripts/package-macos.sh
         env:
           VITE_SUPABASE_URL: https://tsxgcjhcyckgbrkvebfq.supabase.co
-          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_BSuasiiVhBSbKNyLFde0Zw_OTPgOx8Z' }}
       - uses: actions/upload-artifact@v4
         with:
           name: GoodTake-Apple-Silicon-unsigned
           path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
+      - run: |
+          curl -fL --retry 2 https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin -o "$RUNNER_TEMP/ggml-tiny.bin"
+          .tooling/venv/bin/python scripts/verify_macos_package.py \
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/GoodTake.app "$RUNNER_TEMP/ggml-tiny.bin"
