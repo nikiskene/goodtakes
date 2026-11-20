@@ -1,0 +1,6 @@
+{
+  "identifier": "desktop",
+  "description": "GoodTake file pickers and app-local commands",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
+}

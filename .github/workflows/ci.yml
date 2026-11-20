@@ -1,0 +1,31 @@
+name: GoodTake CI
+on:
+  pull_request:
+  push:
+    branches: [main, 'goodtake/**']
+permissions:
+  contents: read
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+  engine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg cmake fonts-dejavu-core
+      - run: bash scripts/setup-runtime.sh
+      - run: |
+          curl -fL --retry 2 https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin -o "$RUNNER_TEMP/ggml-tiny.bin"
+          export GOODTAKE_WHISPER_CLI="$PWD/.tooling/bin/whisper-cli"
+          .tooling/venv/bin/python scripts/verify_engine.py --speech "$RUNNER_TEMP/ggml-tiny.bin"

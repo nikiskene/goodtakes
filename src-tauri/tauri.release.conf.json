@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.png"],
+    "externalBin": ["binaries/goodtake-worker"],
+    "resources": {"resources/runtime/": "runtime/"}
+  }
+}

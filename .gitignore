@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.tooling/
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/resources/
+__pycache__/
+*.pyc
+.DS_Store
