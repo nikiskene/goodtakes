@@ -14,3 +14,7 @@ GoodTake launches FFmpeg, ffprobe, Whisper and llama.cpp as distinct executable 
 | Product demo | GoodTake synthetic fixture | Original scripted text, generated graphics and synthesized voice. The Flite utility generates the sample offline and is never shipped with GoodTake. |
 
 Internal unsigned build artifacts are intended for evaluation. Before publishing a desktop release, complete the binary dependency and notice audit above and arrange Apple Developer ID signing and notarization.
+
+## Browser editor
+
+The browser uses the ffmpeg.wasm single-threaded core 0.12.10 (GPL-2.0-or-later) and its MIT-licensed JavaScript wrapper. See the [browser third-party notices](public/web-third-party.txt) for corresponding source and licensing information. Transformers.js, ONNX Runtime Web, the pinned Whisper tiny ONNX conversion and Noto Sans CJK supply local speech recognition and captions.

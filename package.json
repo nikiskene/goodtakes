@@ -6,9 +6,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build",
+    "build:web": "npm run build && node scripts/download-web-model.mjs dist",
     "desktop": "tauri"
   },
   "dependencies": {
+    "@ffmpeg/core": "0.12.10",
+    "@ffmpeg/ffmpeg": "0.12.15",
+    "@huggingface/transformers": "3.8.1",
     "@supabase/supabase-js": "2.86.0",
     "@tauri-apps/api": "2.12.5",
     "@tauri-apps/plugin-dialog": "2.8.4",

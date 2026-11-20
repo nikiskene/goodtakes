@@ -2,6 +2,8 @@ name: Apple Silicon desktop package
 on:
   pull_request:
   workflow_dispatch:
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: "skip"
 permissions:
   contents: read
 jobs:

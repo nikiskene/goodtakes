@@ -1,6 +1,14 @@
 # GoodTake
 
-GoodTake finds short, standalone excerpts in talks and interviews. Review up to three takes, adjust their framing and captions, and export a local MP4. The editing pipeline runs on your Mac. The Netlify page hosts the product demo and download link.
+GoodTake finds short, standalone excerpts in talks and interviews. Review up to three takes, adjust their framing and captions, and export a local MP4. The browser editor and Mac app both process recordings on the device. Netlify serves the web editor, the product demo and the Mac build link.
+
+## Edit on iPhone or iPad
+
+1. Open [GoodTake’s web editor](https://goodtakes.netlify.app/editor) in Safari. Choose a MOV or MP4 from Photos or Files.
+2. Tap **Find takes**. The video engine and multilingual speech model download on first use. An internet connection is needed for setup. The browser may reuse cached model files later. Keep the tab open during processing.
+3. Choose a take, adjust the trim and correct captions. Tap **Export MP4**, then share the result or download it to Files. You can also download the SRT.
+
+The web editor processes one recording up to three minutes and 220 MiB. It exports 720×1280 vertical or 1280×720 landscape H.264/AAC. No account is needed. The page keeps the working edit in the current tab. For a longer source, trim a copy in Photos before importing it. Two-camera sync, separate microphones and saved projects are available in the Mac app.
 
 ## Run on Apple Silicon
 
@@ -29,7 +37,7 @@ Install Homebrew `cmake`, `pkgconf`, `libass` and `zimg`. Run `npm ci` and `bash
 
 ## Netlify
 
-Connect the repo and select the branch containing the editor, or use `main` once the draft PR is merged. Netlify reads `netlify.toml` and publishes `dist` with Node 22. The sample reel on the page uses an original script, a generated title card and synthesized narration. Netlify serves the demo on desktop and mobile. It never receives project media or renders a reel.
+Connect the repo and use `main` as the production branch. Netlify reads `netlify.toml`, builds with Node 22 and publishes `dist`. The build fetches the pinned browser speech model, checks each file’s SHA-256 and serves the weights from the same site. The model files stay out of git. Use `npm run build:web` to build the complete site locally. The sample reel on the page uses an original script, a generated title card and synthesized narration. Netlify serves the demo and editor. The browser downloads the speech model and processes the recording locally. Recordings and exports stay on the device.
 
 The default Mac build link shows the GitHub Actions packaging workflow. Set `VITE_DESKTOP_DOWNLOAD_URL` to a published download if you want to link to it directly.
 
