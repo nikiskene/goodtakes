@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Brand } from './Brand'
-import { BrowserSession, MAX_FILE } from './web/session'
-import { suggest, srt, visibleCues, type Cue, type Cut } from './web/editorial'
+import { BrowserSession, MAX_FILE, type Sequence } from './web/session'
+import { suggest, srt, visibleCues, type Cut } from './web/editorial'
 
-type Analysis = { duration: number; hdr: boolean; cues: Cue[] }
 type Export = { url: string; file: File; captionsUrl: string | null }
 type Shape = 'vertical' | 'landscape'
 
@@ -20,9 +19,12 @@ export default function WebEditor() {
   const active = useRef<symbol | null>(null)
   const preview = useRef<HTMLVideoElement>(null)
   const picker = useRef<HTMLInputElement>(null)
-  const [source, setSource] = useState<File | null>(null)
+  const voicePicker = useRef<HTMLInputElement>(null)
+  const [sources, setSources] = useState<File[]>([])
+  const [voice, setVoice] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState('')
   const [sourceUrl, setSourceUrl] = useState('')
-  const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [analysis, setAnalysis] = useState<Sequence | null>(null)
   const [brief, setBrief] = useState('')
   const [length, setLength] = useState(45)
   const [language, setLanguage] = useState('english')
@@ -39,6 +41,7 @@ export default function WebEditor() {
   const [saved, setSaved] = useState<Export | null>(null)
 
   useEffect(() => () => engine.current?.stop(), [])
+  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl) }, [previewUrl])
   useEffect(() => () => { if (sourceUrl) URL.revokeObjectURL(sourceUrl) }, [sourceUrl])
   useEffect(() => () => {
     if (saved) {
@@ -47,22 +50,59 @@ export default function WebEditor() {
     }
   }, [saved])
 
-  function choose(file: File) {
-    setError('')
-    if (file.size > MAX_FILE) {
-      setError('This recording is over 220 MiB. Trim it in Photos and choose the shorter clip.')
-      return
-    }
-    if (!/\.(mov|mp4|m4v)$/i.test(file.name)) {
-      setError('Choose a MOV or MP4 recording from Photos or Files.')
-      return
-    }
-    setSource(file)
-    setSourceUrl(URL.createObjectURL(file))
-    setPreviewUnavailable(false)
+  function clearReview() {
     setAnalysis(null)
     setCuts([])
+    clearRender()
+  }
+
+  function clearRender() {
     setSaved(null)
+    setPreviewUrl('')
+  }
+
+  function updateSources(next: File[]) {
+    setSources(next)
+    setSourceUrl(next.length === 1 ? URL.createObjectURL(next[0]) : '')
+    setPreviewUnavailable(false)
+    clearReview()
+  }
+
+  function fits(next: File[], recording: File | null) {
+    if (next.reduce((total, file) => total + file.size, recording?.size ?? 0) <= MAX_FILE) return true
+    setError('Use up to 220 MiB of video and audio combined.')
+    return false
+  }
+
+  function addFiles(files: File[]) {
+    if (!files.length) return
+    setError('')
+    if (files.some(file => !/\.(mov|mp4|m4v)$/i.test(file.name) && !/^video\/(quicktime|mp4|x-m4v)$/i.test(file.type))) {
+      setError('Choose MOV or MP4 clips from Photos or Files.')
+      return
+    }
+    const next = [...sources, ...files]
+    if (fits(next, voice)) updateSources(next)
+  }
+
+  function move(index: number, direction: -1 | 1) {
+    const next = [...sources]
+    const target = index + direction
+    next[index] = next[target]
+    next[target] = sources[index]
+    updateSources(next)
+  }
+
+  function chooseVoice(file: File | null) {
+    setError('')
+    if (file && !file.type.startsWith('audio/') && !/\.(m4a|mp3|wav|aac|aif|aiff|caf|flac|ogg|opus|webm)$/i.test(file.name)) {
+      setError('Choose an audio recording such as M4A, MP3 or WAV.')
+      return
+    }
+    if (fits(sources, file)) {
+      setVoice(file)
+      clearReview()
+    }
   }
 
   function select(cut: Cut, index: number) {
@@ -70,7 +110,7 @@ export default function WebEditor() {
     setStart(sliderTime(cut.start))
     setEnd(sliderTime(cut.end))
     setTime(cut.start)
-    setSaved(null)
+    clearRender()
     if (preview.current) {
       preview.current.pause()
       preview.current.currentTime = cut.start
@@ -105,9 +145,9 @@ export default function WebEditor() {
   }
 
   function find() {
-    if (!source) return
+    if (!sources.length) return
     void work('Preparing your recording', async (session, update, current) => {
-      const result = await session.analyze(source, language, update)
+      const result = await session.analyze(sources, voice, language, update)
       if (!current()) return
       const options = suggest(result.cues, length, result.duration, brief)
       setAnalysis(result)
@@ -116,14 +156,18 @@ export default function WebEditor() {
     })
   }
 
-  function exportReel() {
-    if (!source || !analysis) return
-    void work('Preparing export', async (session, update, current) => {
-      const result = await session.export(source, {
-        start, end, shape, cues: analysis.cues, captions: burn, hdr: analysis.hdr,
+  function renderReel(previewOnly: boolean) {
+    if (!analysis) return
+    void work(previewOnly ? 'Preparing preview' : 'Preparing export', async (session, update, current) => {
+      const result = await session.export(analysis, {
+        start, end, shape, captions: burn, preview: previewOnly,
       }, update)
       if (!current()) return
-      const name = `${source.name.replace(/\.[^.]+$/, '') || 'goodtake'}-reel`
+      if (previewOnly) {
+        setPreviewUrl(URL.createObjectURL(result.video))
+        return
+      }
+      const name = `${sources[0].name.replace(/\.[^.]+$/, '') || 'goodtake'}-reel`
       setSaved({
         file: new File([result.video], `${name}.mp4`, { type: 'video/mp4' }),
         url: URL.createObjectURL(result.video),
@@ -158,12 +202,18 @@ export default function WebEditor() {
       }
       setTime(value)
     } else setEnd(value)
-    setSaved(null)
+    clearRender()
   }
 
   function sourcePlayer() {
+    if (sources.length > 1 || voice || previewUnavailable) {
+      return <>
+        {previewUrl && <video className="web-export-preview" src={previewUrl} controls playsInline preload="metadata" />}
+        {!previewUrl && <button className="primary" disabled={!valid || !!stage} onClick={() => renderReel(true)}>Preview reel</button>}
+      </>
+    }
     return <div className={`web-player ${shape}`}>
-      {!previewUnavailable && <video key={sourceUrl} ref={preview} src={sourceUrl} controls playsInline preload="metadata"
+      <video key={sourceUrl} ref={preview} src={sourceUrl} controls playsInline preload="metadata"
         onLoadedMetadata={e => { e.currentTarget.currentTime = start }}
         onError={() => setPreviewUnavailable(true)}
         onPlay={e => {
@@ -174,31 +224,48 @@ export default function WebEditor() {
           const video = e.currentTarget
           if (!video.paused && video.currentTime >= end) video.pause()
           setTime(video.currentTime)
-        }} />}
-      {!previewUnavailable && caption && <p className="web-caption">{caption}</p>}
-      {previewUnavailable && <p className="web-playback-note">This browser can’t preview the original codec. You can review the trimmed MP4 after export.</p>}
+        }} />
+      {caption && <p className="web-caption">{caption}</p>}
     </div>
   }
 
   return <div className="desktop-app web-editor">
     <header className="app-bar"><a href="/" aria-label="GoodTake home"><Brand /></a>
-      <button type="button" disabled={!!stage} onClick={() => picker.current?.click()}>Choose video</button></header>
+      {reviewing && <button type="button" disabled={!!stage} onClick={clearReview}>Edit sources</button>}</header>
     <main className="app-shell">
-      <input ref={picker} type="file" accept="video/*,.mov,.mp4,.m4v" hidden
-        onChange={e => { const file = e.target.files?.[0]; if (file) choose(file); e.target.value = '' }} />
+      <input ref={picker} aria-label="Video clips" type="file" accept="video/*,.mov,.mp4,.m4v" multiple hidden
+        onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} />
+      <input ref={voicePicker} aria-label="Voice recording" type="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf,.aiff" hidden
+        onChange={e => { const file = e.target.files?.[0]; if (file) chooseVoice(file); e.target.value = '' }} />
       {stage && <div className="notice working" role="status"><span><i /> {stage}</span><button onClick={cancel}>Cancel</button></div>}
       {error && <div className="notice error" role="alert"><span>{error}</span><button onClick={() => setError('')}>Dismiss</button></div>}
       {!reviewing && <div className="import-layout">
         <section className="surface stack">
           <div><span className="eyebrow">GOODTAKE WEB EDITOR</span><h1>Make a reel</h1>
-            <p>Choose one recording from Photos or Files. GoodTake finds a short clip and adds captions on this device.</p></div>
+            <p>Add clips from Photos or Files. GoodTake joins them in the order below and suggests a reel with captions.</p></div>
           <div className="drop-zone" onDragOver={e => e.preventDefault()} onDrop={e => {
             e.preventDefault()
-            if (!stage && e.dataTransfer.files[0]) choose(e.dataTransfer.files[0])
+            if (!stage) addFiles(Array.from(e.dataTransfer.files))
           }}>
-            <div className="file-row"><span><strong>{source?.name || 'One MOV or MP4 recording'}</strong>
-              <small>{source ? `${(source.size / 1024 ** 2).toFixed(1)} MiB` : 'Up to three minutes and 220 MiB'}</small></span>
-              <button disabled={!!stage} onClick={() => picker.current?.click()}>{source ? 'Change' : 'Choose video'}</button></div>
+            <div className="file-row">
+              <span><strong>Video clips</strong><small>Up to three minutes of video and 220 MiB of files total</small></span>
+              <button disabled={!!stage} onClick={() => picker.current?.click()}>Add clips</button>
+            </div>
+            {sources.map((file, index) => <div className="file-row" key={`${index}-${file.name}`}>
+              <span><strong>{index + 1}. {file.name}</strong></span>
+              <button disabled={!!stage || index === 0} aria-label={`Move clip ${index + 1} earlier`} onClick={() => move(index, -1)}>↑</button>
+              <button disabled={!!stage || index === sources.length - 1} aria-label={`Move clip ${index + 1} later`} onClick={() => move(index, 1)}>↓</button>
+              <button disabled={!!stage} aria-label={`Remove clip ${index + 1}`}
+                onClick={() => updateSources(sources.filter((_, position) => position !== index))}>Remove</button>
+            </div>)}
+          </div>
+          <div className="drop-zone">
+            <div className="file-row">
+              <span><strong>{voice?.name ?? 'Separate voice recording'}</strong><small>{voice ? 'Voice track selected' : 'Optional · e.g. an exported Voice Memo'}</small></span>
+              <button disabled={!!stage} onClick={() => voicePicker.current?.click()}>{voice ? 'Change' : 'Add voice'}</button>
+              {voice && <button disabled={!!stage} aria-label="Remove voice recording" onClick={() => chooseVoice(null)}>Remove</button>}
+            </div>
+            {voice && <p>Starts at the first clip and replaces the clips’ audio. Captions follow this recording.</p>}
           </div>
           <label>Creative brief <small>optional</small><textarea rows={2} maxLength={250} value={brief}
             placeholder="Find the moment I explain what surprised me in Shenzhen."
@@ -212,7 +279,7 @@ export default function WebEditor() {
               <option value="english">English</option><option value="german">German</option>
               <option value="spanish">Spanish</option><option value="french">French</option><option value="chinese">Chinese</option></select></label>
           </div>
-          <button className="primary" disabled={!source || !!stage} onClick={find}>Find takes <span aria-hidden="true">→</span></button>
+          <button className="primary" disabled={!sources.length || !!stage} onClick={find}>Find takes <span aria-hidden="true">→</span></button>
         </section>
         <aside className="surface stack">
           <h2>First time on this device</h2>
@@ -231,25 +298,27 @@ export default function WebEditor() {
           {cuts.map((cut, index) => <button key={`${cut.start}-${cut.end}`} className="take-choice" aria-pressed={selected === index}
             disabled={!!stage} onClick={() => select(cut, index)}><span>{cut.opening}</span>
             <small>{clock(cut.start)} to {clock(cut.end)} · {Math.round(cut.end - cut.start)} seconds</small></button>)}
+          {sources.length > 1 && analysis.duration <= 60 && <button disabled={!!stage}
+            onClick={() => select({ start: 0, end: analysis.duration, opening: '' }, -1)}>Use full sequence</button>}
           <div className="settings-row">
             <label>Start, sec<input type="number" min={0} max={end - 1} step="0.01" inputMode="decimal" value={start}
               disabled={!!stage} onChange={e => updateTrim('start', Number(e.target.value))} /></label>
             <label>End, sec<input type="number" min={start + 1} max={sliderTime(analysis.duration)} step="0.01" inputMode="decimal" value={end}
               disabled={!!stage} onChange={e => updateTrim('end', Number(e.target.value))} /></label>
           </div>
-          <label>Format<select value={shape} onChange={e => { setShape(e.target.value as Shape); setSaved(null) }} disabled={!!stage}>
+          <label>Format<select value={shape} onChange={e => { setShape(e.target.value as Shape); clearRender() }} disabled={!!stage}>
             <option value="vertical">Vertical · 9:16</option><option value="landscape">Landscape · 16:9</option></select></label>
           {currentCaptions.length > 0 && <details><summary>Edit captions</summary><div className="caption-fields">
             {currentCaptions.map(cue => <label key={cue.id}>{clock(cue.start)}
               <textarea rows={2} maxLength={220} value={cue.text} disabled={!!stage} onChange={e => {
                 const text = e.target.value
                 setAnalysis({ ...analysis, cues: analysis.cues.map(item => item.id === cue.id ? { ...item, text } : item) })
-                setSaved(null)
+                clearRender()
               }} /></label>)}</div></details>}
           <label className="check"><input type="checkbox" checked={burn} disabled={!!stage}
-            onChange={e => { setBurn(e.target.checked); setSaved(null) }} /> Burn captions into video</label>
+            onChange={e => { setBurn(e.target.checked); clearRender() }} /> Burn captions into video</label>
           {!valid && <p>Choose a clip between 1 and 60 seconds inside your recording.</p>}
-          <button className="primary" disabled={!valid || !!stage} onClick={exportReel}>Export MP4</button>
+          <button className="primary" disabled={!valid || !!stage} onClick={() => renderReel(false)}>Export MP4</button>
           {saved && <div className="stack export-box" role="region" aria-label="Finished reel">
             <h2>Your reel is ready</h2>
             <video className="web-export-preview" src={saved.url} controls playsInline preload="metadata" />

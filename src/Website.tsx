@@ -44,7 +44,7 @@ export default function Website() {
       <section id="workflow" className="workflow">
         <h2>From recording to reel</h2>
         <div className="workflow-grid">
-          <article><span className="workflow-icon" aria-hidden="true">↓</span><h3>Bring your footage</h3><p>Choose a recording from Photos or Files on your phone. For two camera angles or a separate microphone, use the Mac app.</p></article>
+          <article><span className="workflow-icon" aria-hidden="true">↓</span><h3>Bring your footage</h3><p>Add clips from Photos or Files on your phone. Arrange them in order and add a voice recording if you like.</p></article>
           <article><span className="workflow-icon" aria-hidden="true">▷</span><h3>Review the best takes</h3><p>Start with the strongest suggestion. Change the trim, angle, crop, or captions in one review screen.</p></article>
           <article><span className="workflow-icon" aria-hidden="true">↗︎</span><h3>Export when it’s ready</h3><p>Save a vertical or landscape MP4 and an optional SRT. Your recordings and edits stay on your device.</p></article>
         </div>

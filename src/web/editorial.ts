@@ -89,8 +89,8 @@ export function ass(cues: Cue[], width: number, height: number, fontFamily: stri
   const vertical = height > width
   const header = `[Script Info]
 ScriptType: v4.00+
-PlayResX: ${width}
-PlayResY: ${height}
+PlayResX: ${vertical ? 720 : 1280}
+PlayResY: ${vertical ? 1280 : 720}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 [V4+ Styles]

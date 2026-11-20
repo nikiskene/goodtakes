@@ -4,11 +4,11 @@ GoodTake finds short, standalone excerpts in talks and interviews. Review up to 
 
 ## Edit on iPhone or iPad
 
-1. Open [GoodTake’s web editor](https://goodtakes.netlify.app/editor) in Safari. Choose a MOV or MP4 from Photos or Files.
+1. Open [GoodTake’s web editor](https://goodtakes.netlify.app/editor) in Safari. Add MOV or MP4 clips from Photos or Files. Put them in order and optionally add an audio file such as an exported M4A Voice Memo.
 2. Tap **Find takes**. The video engine and multilingual speech model download on first use. An internet connection is needed for setup. The browser may reuse cached model files later. Keep the tab open during processing.
 3. Choose a take, adjust the trim and correct captions. Tap **Export MP4**, then share the result or download it to Files. You can also download the SRT.
 
-The web editor processes one recording up to three minutes and 220 MiB. It exports 720×1280 vertical or 1280×720 landscape H.264/AAC. No account is needed. The page keeps the working edit in the current tab. For a longer source, trim a copy in Photos before importing it. Two-camera sync, separate microphones and saved projects are available in the Mac app.
+The web editor processes up to three minutes of video and 220 MiB of files combined. A separate voice recording starts at the beginning, replaces the clips’ audio, and supplies the captions. It exports 720×1280 vertical or 1280×720 landscape H.264/AAC. No account is needed. The page keeps the working edit in the current tab. For a longer source, trim a copy in Photos before importing it. Synchronized camera angles and saved projects are available in the Mac app.
 
 ## Run on Apple Silicon
 
