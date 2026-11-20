@@ -26,7 +26,7 @@ export default function WebEditor() {
   const [sourceUrl, setSourceUrl] = useState('')
   const [analysis, setAnalysis] = useState<Sequence | null>(null)
   const [brief, setBrief] = useState('')
-  const [length, setLength] = useState(45)
+  const [maximum, setMaximum] = useState(45)
   const [language, setLanguage] = useState('english')
   const [shape, setShape] = useState<Shape>('vertical')
   const [cuts, setCuts] = useState<Cut[]>([])
@@ -149,8 +149,8 @@ export default function WebEditor() {
     void work('Preparing your recording', async (session, update, current) => {
       const result = await session.analyze(sources, voice, language, update)
       if (!current()) return
-      const options = suggest(result.cues, length, result.duration, brief)
-      const edited = montage(result.clips.map(clip => ({ duration: clip.frames / 30, visuals: clip.visuals })), result.cues, length, brief, Boolean(voice))
+      const options = suggest(result.cues, maximum, result.duration, brief)
+      const edited = montage(result.clips.map(clip => ({ duration: clip.frames / 30, visuals: clip.visuals })), result.cues, maximum, brief, Boolean(voice), result.voiceDuration)
       if (edited.ranges) options.unshift(edited)
       setAnalysis(result)
       setCuts(options)
@@ -162,7 +162,7 @@ export default function WebEditor() {
     if (!analysis) return
     void work(previewOnly ? 'Preparing preview' : 'Preparing export', async (session, update, current) => {
       const result = await session.export(analysis, {
-        start, end, shape, captions: burn, preview: previewOnly, ranges: cuts[selected]?.ranges, audioRanges: cuts[selected]?.audioRanges,
+        start, end, maximum, shape, captions: burn, preview: previewOnly, ranges: cuts[selected]?.ranges, audioRanges: cuts[selected]?.audioRanges,
       }, update)
       if (!current()) return
       if (previewOnly) {
@@ -196,7 +196,9 @@ export default function WebEditor() {
     : visibleCues(analysis.cues, start, end)) : []
   const caption = burn && currentCaptions.find(cue => cue.start <= time && cue.end > time)?.text
   const activeDuration = end - start
-  const valid = Number.isFinite(activeDuration) && start >= 0 && !!analysis && end <= analysis.duration + .01 && activeDuration >= 1 && activeDuration <= 60.01
+  const frameDuration = Math.round(end * 30) - Math.round(start * 30)
+  const valid = Number.isFinite(frameDuration) && start >= 0 && !!analysis
+    && end <= sliderTime(analysis.duration) && frameDuration >= 30 && frameDuration <= maximum * 30
 
   function updateTrim(which: 'start' | 'end', value: number) {
     if (which === 'start') {
@@ -276,8 +278,8 @@ export default function WebEditor() {
             placeholder="Find the moment I explain what surprised me in Shenzhen."
             onChange={e => setBrief(e.target.value)} disabled={!!stage} /></label>
           <div className="settings-row">
-            <label>Target length<select value={length} onChange={e => setLength(Number(e.target.value))} disabled={!!stage}>
-              <option value={30}>30 seconds</option><option value={45}>45 seconds</option><option value={60}>60 seconds</option></select></label>
+            <label>Maximum reel length<select value={maximum} onChange={e => setMaximum(Number(e.target.value))} disabled={!!stage}>
+              <option value={30}>Up to 30 seconds</option><option value={45}>Up to 45 seconds</option><option value={60}>Up to 60 seconds</option></select></label>
             <label>Format<select value={shape} onChange={e => setShape(e.target.value as Shape)} disabled={!!stage}>
               <option value="vertical">Vertical · 9:16</option><option value="landscape">Landscape · 16:9</option></select></label>
             <label>Audio language<select value={language} onChange={e => setLanguage(e.target.value)} disabled={!!stage}>
@@ -303,12 +305,12 @@ export default function WebEditor() {
           {cuts.map((cut, index) => <button key={`${cut.start}-${cut.end}`} className="take-choice" aria-pressed={selected === index}
             disabled={!!stage} onClick={() => select(cut, index)}><span>{cut.opening}</span>
             <small>{cut.ranges ? `${cut.ranges.length} shots · ` : `${clock(cut.start)} to ${clock(cut.end)} · `}{Math.round(cut.end - cut.start)} seconds</small></button>)}
-          {sources.length > 1 && analysis.duration <= 60 && <button disabled={!!stage}
+          {sources.length > 1 && analysis.duration <= maximum && <button disabled={!!stage}
             onClick={() => select({ start: 0, end: analysis.duration, opening: '' }, -1)}>Use full sequence</button>}
           {!editRanges && <div className="settings-row">
             <label>Start, sec<input type="number" min={0} max={end - 1} step="0.01" inputMode="decimal" value={start}
               disabled={!!stage} onChange={e => updateTrim('start', Number(e.target.value))} /></label>
-            <label>End, sec<input type="number" min={start + 1} max={sliderTime(analysis.duration)} step="0.01" inputMode="decimal" value={end}
+            <label>End, sec<input type="number" min={start + 1} max={Math.min(sliderTime(analysis.duration), start + maximum)} step="0.01" inputMode="decimal" value={end}
               disabled={!!stage} onChange={e => updateTrim('end', Number(e.target.value))} /></label>
           </div>}
           <label>Format<select value={shape} onChange={e => { setShape(e.target.value as Shape); clearRender() }} disabled={!!stage}>
@@ -322,7 +324,7 @@ export default function WebEditor() {
               }} /></label>)}</div></details>}
           <label className="check"><input type="checkbox" checked={burn} disabled={!!stage}
             onChange={e => { setBurn(e.target.checked); clearRender() }} /> Burn captions into video</label>
-          {!valid && <p>Choose a clip between 1 and 60 seconds inside your recording.</p>}
+          {!valid && <p>Choose a clip between 1 and {maximum} seconds inside your recording.</p>}
           <button className="primary" disabled={!valid || !!stage} onClick={() => renderReel(false)}>Export MP4</button>
           {saved && <div className="stack export-box" role="region" aria-label="Finished reel">
             <h2>Your reel is ready</h2>

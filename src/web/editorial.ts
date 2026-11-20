@@ -5,10 +5,14 @@ export type Cut = Range & { opening: string; ranges?: Range[]; audioRanges?: Ran
 export type VisualBeat = { time: number; quality: number; change: number; view: number[] }
 type Footage = { duration: number; visuals: VisualBeat[] }
 
-export function montage(clips: Footage[], cues: Cue[], target: number, brief: string, voice: boolean): Cut {
+export function montage(clips: Footage[], cues: Cue[], maximum: number, brief: string, voice: boolean, voiceDuration?: number): Cut {
   const fps = 30
   const total = clips.reduce((sum, clip) => sum + clip.duration, 0)
-  const budget = Math.min(target, Math.max(1, total * .81))
+  const speechDuration = cues.reduce((sum, cue) => sum + cue.end - cue.start + .35, 0)
+  const contentDuration = voice
+    ? voiceDuration ?? (cues.length ? Math.max(...cues.map(cue => cue.end)) + .3 : total)
+    : speechDuration > 0 ? Math.max(4, speechDuration) : total
+  const budget = Math.min(maximum, Math.max(1, total * .81), Math.max(1, contentDuration))
   const rhythm = [1.05, 1.65, 2.2, 1.35, 2.6, 1.75, 2.0]
   const relevant = terms(brief)
   const ranges: Range[] = []
@@ -65,7 +69,7 @@ export function montage(clips: Footage[], cues: Cue[], target: number, brief: st
     sourceOffset += duration
   }
   if (output < 1 - 1e-6 || ranges.length < 2) {
-    return { start: 0, end: Math.min(total, target), opening: 'Start of recording' }
+    return { start: 0, end: budget, opening: 'Start of recording' }
   }
   return switchViews(clips, ranges, cues, voice, output)
 }
@@ -165,7 +169,7 @@ function terms(text: string) {
   return new Set((text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter(word => !stopWords.has(word)))
 }
 
-export function suggest(cues: Cue[], length: number, sourceLength: number, brief: string): Cut[] {
+export function suggest(cues: Cue[], maximum: number, sourceLength: number, brief: string): Cut[] {
   const relevant = terms(brief)
   const choices: (Cut & { score: number })[] = []
   for (const [i, first] of cues.entries()) {
@@ -173,8 +177,8 @@ export function suggest(cues: Cue[], length: number, sourceLength: number, brief
       const start = Math.max(0, first.start - .08)
       const end = Math.min(sourceLength, last.end + .10)
       const duration = end - start
-      if (duration > 60 || duration > length + 13) break
-      if (duration < Math.min(12, sourceLength * .85)) continue
+      if (duration > maximum) break
+      if (duration < 1) continue
       const selection = cues.slice(i, i + j + 1)
       const text = selection.map(cue => cue.text).join(' ')
       const set = terms(text)
@@ -184,7 +188,7 @@ export function suggest(cues: Cue[], length: number, sourceLength: number, brief
       const payoff = /[.!?。！？][”’"']?$/.test(last.text)
       const dependent = /^(and|but|also|because)\b/i.test(first.text)
       const score = Math.min(1, speech) + 2 * relevance + Number(boundary) * .65 + Number(payoff) * .65
-        - Number(dependent) * .45 - Math.abs(duration - length) / 10 - (duration < 28 ? 1.4 : 0)
+        - Number(dependent) * .45 - .012 * duration
       choices.push({ start, end, opening: first.text, score })
     }
   }
@@ -197,7 +201,7 @@ export function suggest(cues: Cue[], length: number, sourceLength: number, brief
     if (!duplicates) cuts.push(choice)
     if (cuts.length === 3) break
   }
-  return cuts.length ? cuts : [{ start: 0, end: Math.min(sourceLength, length), opening: cues[0]?.text || 'Start of recording' }]
+  return cuts.length ? cuts : [{ start: 0, end: Math.min(sourceLength, maximum, 8), opening: cues[0]?.text || 'Start of recording' }]
 }
 
 export function visibleCues(cues: Cue[], start: number, end: number) {

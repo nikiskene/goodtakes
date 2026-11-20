@@ -10,7 +10,7 @@ const eastAsianFont = 'https://raw.githubusercontent.com/notofonts/noto-cjk/Sans
 
 const FPS = 30
 type Clip = { file: File; frames: number; audio: boolean; hdr: boolean; visuals: VisualBeat[] }
-export type Sequence = { clips: Clip[]; voice: File | null; duration: number; cues: Cue[] }
+export type Sequence = { clips: Clip[]; voice: File | null; voiceDuration?: number; duration: number; cues: Cue[] }
 type Work = (stage: string) => void
 type Shape = 'vertical' | 'landscape'
 type SpeechResponse = { stage?: string; chunks?: SpeechItem[]; error?: string }
@@ -190,12 +190,14 @@ export class BrowserSession {
       })
     }
     if (frames < FPS) throw new Error('Add at least one second of video in total.')
+    let voiceDuration: number | undefined
     if (voice) {
       stage('Checking the voice recording')
       const metadata = await this.probe(voice)
-      if (!metadata.streams?.some(stream => stream.codec_type === 'audio')) {
-        throw new Error('Choose a voice recording with an audio track.')
-      }
+      const audio = metadata.streams?.find(stream => stream.codec_type === 'audio')
+      if (!audio) throw new Error('Choose a voice recording with an audio track.')
+      const measured = Number(audio.duration) || Number(metadata.format?.duration)
+      if (Number.isFinite(measured) && measured > 0) voiceDuration = measured
     }
     for (const [index, clip] of clips.entries()) {
       stage(`Looking for visual changes · clip ${index + 1} of ${clips.length}`)
@@ -213,7 +215,7 @@ export class BrowserSession {
       peak = Math.max(peak, Math.abs(audio[i]))
     }
     const cues = peak > .002 ? groupCaptions(await this.transcribe(audio, language, stage), duration) : []
-    return { clips, voice, duration, cues }
+    return { clips, voice, voiceDuration, duration, cues }
   }
 
   private transcribe(audio: Float32Array<ArrayBuffer>, language: string, stage: Work) {
@@ -240,9 +242,9 @@ export class BrowserSession {
   }
 
   async export(sequence: Sequence, options: {
-    start: number; end: number; shape: Shape; captions: boolean; preview?: boolean; ranges?: Range[]; audioRanges?: Range[]
+    start: number; end: number; maximum: number; shape: Shape; captions: boolean; preview?: boolean; ranges?: Range[]; audioRanges?: Range[]
   }, stage: Work) {
-    const { start, end, shape, captions, preview } = options
+    const { start, end, maximum, shape, captions, preview } = options
     const toFrames = (range: Range) => ({
       start: Math.round(range.start * FPS),
       zoom: range.zoom ?? 1,
@@ -251,8 +253,8 @@ export class BrowserSession {
     const ranges = (options.ranges ?? [{ start, end }]).map(toFrames)
     const totalFrames = ranges.reduce((sum, range) => sum + range.end - range.start, 0)
     if (ranges.some(range => !Number.isFinite(range.start) || !(range.end > range.start) || range.start < 0)
-        || totalFrames < FPS || totalFrames > 60 * FPS) {
-      throw new Error('Choose a reel between 1 and 60 seconds.')
+        || totalFrames < FPS || totalFrames > Math.floor(maximum * FPS)) {
+      throw new Error(`Choose a reel between 1 and ${maximum} seconds.`)
     }
     this.speech?.terminate()
     this.speech = undefined
